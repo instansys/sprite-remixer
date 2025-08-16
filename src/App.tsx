@@ -44,7 +44,7 @@ function App() {
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const animationCanvasRef = useRef<HTMLCanvasElement>(null)
-  const animationFrameRef = useRef<number>()
+  const animationFrameRef = useRef<number>(0)
   const lastFrameTimeRef = useRef<number>(0)
 
   // Save settings to localStorage whenever they change
@@ -589,22 +589,17 @@ function App() {
                   key={frame.index}
                   className={`sprite-frame ${frame.selected ? 'selected' : ''}`}
                   onClick={() => toggleFrame(frame.index)}
-                  style={{
-                    width: `${Math.min(frame.width, 150)}px`,
-                    height: `${Math.min(frame.height, 150)}px`,
-                    overflow: 'hidden',
-                    position: 'relative'
-                  }}
                 >
-                  <img
-                    src={originalImage}
-                    alt={`Frame ${frame.index + 1}`}
+                  <div
                     style={{
                       position: 'absolute',
-                      left: `-${frame.x * Math.min(150 / frame.width, 1)}px`,
-                      top: `-${frame.y * Math.min(150 / frame.height, 1)}px`,
-                      width: `${srcCols * Math.min(150, frame.width)}px`,
-                      height: `${srcRows * Math.min(150, frame.height)}px`,
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      backgroundImage: `url(${originalImage})`,
+                      backgroundSize: `${srcCols * 100}% ${srcRows * 100}%`,
+                      backgroundPosition: `${-(frame.index % srcCols) * 100}% ${-Math.floor(frame.index / srcCols) * 100}%`,
                       imageRendering: 'pixelated'
                     }}
                   />
