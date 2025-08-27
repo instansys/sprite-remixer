@@ -37,10 +37,14 @@ function App() {
   const [targetHeight, setTargetHeight] = useState(() => loadSetting(STORAGE_KEYS.targetHeight, 32) as number)
   const [paletteSize, setPaletteSize] = useState(() => loadSetting(STORAGE_KEYS.paletteSize, 16) as number)
   const [enableDithering, setEnableDithering] = useState(() => loadSetting(STORAGE_KEYS.enableDithering, true) as boolean)
+  const [removeBackground, setRemoveBackground] = useState(false)
+  const [backgroundTolerance, setBackgroundTolerance] = useState(10)
   const [processedImageUrl, setProcessedImageUrl] = useState<string | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [fps, setFps] = useState(() => loadSetting(STORAGE_KEYS.fps, 12) as number)
   const [currentFrame, setCurrentFrame] = useState(0)
+  const [isProcessingVideo, setIsProcessingVideo] = useState(false)
+  const [videoProgress, setVideoProgress] = useState({ current: 0, total: 0 })
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const animationCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -80,19 +84,129 @@ function App() {
     const file = e.target.files?.[0]
     if (!file) return
 
-    const reader = new FileReader()
-    reader.onload = (event) => {
-      const imageUrl = event.target?.result as string
-      setOriginalImage(imageUrl)
-      
-      // Create image to get dimensions
-      const img = new Image()
-      img.onload = () => {
-        generateFrames(img.width, img.height)
+    // Check if it's a video file
+    if (file.type.startsWith('video/')) {
+      handleVideoUpload(file)
+    } else {
+      // Handle image file as before
+      const reader = new FileReader()
+      reader.onload = (event) => {
+        const imageUrl = event.target?.result as string
+        setOriginalImage(imageUrl)
+        
+        // Create image to get dimensions
+        const img = new Image()
+        img.onload = () => {
+          generateFrames(img.width, img.height)
+        }
+        img.src = imageUrl
       }
-      img.src = imageUrl
+      reader.readAsDataURL(file)
     }
-    reader.readAsDataURL(file)
+  }
+
+  const handleVideoUpload = async (file: File) => {
+    setIsProcessingVideo(true)
+    setVideoProgress({ current: 0, total: 0 })
+    
+    const videoUrl = URL.createObjectURL(file)
+    const video = document.createElement('video')
+    video.src = videoUrl
+    video.muted = true
+    
+    // Wait for video metadata to load
+    await new Promise((resolve) => {
+      video.addEventListener('loadedmetadata', resolve, { once: true })
+    })
+    
+    const duration = video.duration
+    const fps = 30 // Assume 30fps for sampling calculation
+    const totalFrames = Math.floor(duration * fps)
+    const sampleInterval = 10 // Sample every 10 frames
+    const samplesToTake = Math.min(Math.floor(totalFrames / sampleInterval), 50) // Max 50 samples
+    
+    setVideoProgress({ current: 0, total: samplesToTake })
+    
+    // Canvas for extracting frames
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    const ctx = canvas.getContext('2d')
+    if (!ctx) {
+      setIsProcessingVideo(false)
+      return
+    }
+    
+    // Extract frames
+    const extractedFrames: string[] = []
+    
+    // Process frames in chunks to avoid blocking UI
+    const processFrame = async (i: number) => {
+      if (i >= samplesToTake) {
+        // All frames processed, create sprite sheet
+        await createSpriteSheet(extractedFrames, video.videoWidth, video.videoHeight)
+        URL.revokeObjectURL(videoUrl)
+        setIsProcessingVideo(false)
+        return
+      }
+      
+      const time = (i * sampleInterval) / fps
+      video.currentTime = time
+      
+      await new Promise((resolve) => {
+        video.addEventListener('seeked', resolve, { once: true })
+      })
+      
+      // Draw current frame to canvas
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      extractedFrames.push(canvas.toDataURL())
+      
+      setVideoProgress({ current: i + 1, total: samplesToTake })
+      
+      // Process next frame after a short delay to keep UI responsive
+      setTimeout(() => processFrame(i + 1), 10)
+    }
+    
+    // Start processing
+    processFrame(0)
+  }
+  
+  const createSpriteSheet = async (frames: string[], frameWidth: number, frameHeight: number) => {
+    const cols = Math.ceil(Math.sqrt(frames.length))
+    const rows = Math.ceil(frames.length / cols)
+    
+    const spriteCanvas = document.createElement('canvas')
+    spriteCanvas.width = frameWidth * cols
+    spriteCanvas.height = frameHeight * rows
+    const spriteCtx = spriteCanvas.getContext('2d')
+    if (!spriteCtx) return
+    
+    // Draw all frames to sprite sheet
+    for (let i = 0; i < frames.length; i++) {
+      const img = new Image()
+      img.src = frames[i]
+      await new Promise((resolve) => {
+        img.onload = resolve
+      })
+      
+      const col = i % cols
+      const row = Math.floor(i / cols)
+      spriteCtx.drawImage(
+        img,
+        col * frameWidth,
+        row * frameHeight,
+        frameWidth,
+        frameHeight
+      )
+    }
+    
+    // Set the sprite sheet as the original image
+    setOriginalImage(spriteCanvas.toDataURL())
+    setSrcCols(cols)
+    setSrcRows(rows)
+    
+    // Generate frames for the sprite sheet
+    generateFrames(spriteCanvas.width, spriteCanvas.height)
   }
 
   const generateFrames = (imageWidth: number, imageHeight: number) => {
@@ -199,6 +313,129 @@ function App() {
     return palette
   }
 
+  const detectBackgroundColor = (imageData: ImageData, width: number, height: number): number[] => {
+    // Sample colors from the edges
+    const edgeColors: Map<string, number> = new Map()
+    
+    // Top and bottom edges
+    for (let x = 0; x < width; x++) {
+      const topIdx = x * 4
+      const bottomIdx = ((height - 1) * width + x) * 4
+      
+      const topColor = `${imageData.data[topIdx]},${imageData.data[topIdx + 1]},${imageData.data[topIdx + 2]}`
+      const bottomColor = `${imageData.data[bottomIdx]},${imageData.data[bottomIdx + 1]},${imageData.data[bottomIdx + 2]}`
+      
+      edgeColors.set(topColor, (edgeColors.get(topColor) || 0) + 1)
+      edgeColors.set(bottomColor, (edgeColors.get(bottomColor) || 0) + 1)
+    }
+    
+    // Left and right edges
+    for (let y = 0; y < height; y++) {
+      const leftIdx = y * width * 4
+      const rightIdx = (y * width + width - 1) * 4
+      
+      const leftColor = `${imageData.data[leftIdx]},${imageData.data[leftIdx + 1]},${imageData.data[leftIdx + 2]}`
+      const rightColor = `${imageData.data[rightIdx]},${imageData.data[rightIdx + 1]},${imageData.data[rightIdx + 2]}`
+      
+      edgeColors.set(leftColor, (edgeColors.get(leftColor) || 0) + 1)
+      edgeColors.set(rightColor, (edgeColors.get(rightColor) || 0) + 1)
+    }
+    
+    // Find most common edge color
+    let maxCount = 0
+    let bgColor = '0,0,0'
+    
+    edgeColors.forEach((count, color) => {
+      if (count > maxCount) {
+        maxCount = count
+        bgColor = color
+      }
+    })
+    
+    return bgColor.split(',').map(c => parseInt(c))
+  }
+
+  const removeBackgroundFromImage = (imageData: ImageData, width: number, height: number): ImageData => {
+    const bgColor = detectBackgroundColor(imageData, width, height)
+    const tolerance = backgroundTolerance
+    const result = new ImageData(width, height)
+    const visited = new Set<number>()
+    
+    // Color similarity check
+    const isColorSimilar = (idx: number): boolean => {
+      const r = imageData.data[idx]
+      const g = imageData.data[idx + 1]
+      const b = imageData.data[idx + 2]
+      
+      return Math.abs(r - bgColor[0]) <= tolerance &&
+             Math.abs(g - bgColor[1]) <= tolerance &&
+             Math.abs(b - bgColor[2]) <= tolerance
+    }
+    
+    // Flood fill from edges
+    const floodFill = (startX: number, startY: number) => {
+      const queue: [number, number][] = [[startX, startY]]
+      
+      while (queue.length > 0) {
+        const [x, y] = queue.shift()!
+        const idx = (y * width + x) * 4
+        const pixelKey = y * width + x
+        
+        if (x < 0 || x >= width || y < 0 || y >= height || visited.has(pixelKey)) {
+          continue
+        }
+        
+        visited.add(pixelKey)
+        
+        if (isColorSimilar(idx)) {
+          // Mark as transparent
+          result.data[idx] = imageData.data[idx]
+          result.data[idx + 1] = imageData.data[idx + 1]
+          result.data[idx + 2] = imageData.data[idx + 2]
+          result.data[idx + 3] = 0 // Set alpha to 0
+          
+          // Add neighbors
+          queue.push([x + 1, y])
+          queue.push([x - 1, y])
+          queue.push([x, y + 1])
+          queue.push([x, y - 1])
+        } else {
+          // Keep original pixel
+          result.data[idx] = imageData.data[idx]
+          result.data[idx + 1] = imageData.data[idx + 1]
+          result.data[idx + 2] = imageData.data[idx + 2]
+          result.data[idx + 3] = imageData.data[idx + 3]
+        }
+      }
+    }
+    
+    // Start flood fill from all edges
+    for (let x = 0; x < width; x++) {
+      floodFill(x, 0) // Top edge
+      floodFill(x, height - 1) // Bottom edge
+    }
+    for (let y = 0; y < height; y++) {
+      floodFill(0, y) // Left edge
+      floodFill(width - 1, y) // Right edge
+    }
+    
+    // Copy remaining pixels
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = (y * width + x) * 4
+        const pixelKey = y * width + x
+        if (!visited.has(pixelKey)) {
+          result.data[idx] = imageData.data[idx]
+          result.data[idx + 1] = imageData.data[idx + 1]
+          result.data[idx + 2] = imageData.data[idx + 2]
+          result.data[idx + 3] = imageData.data[idx + 3]
+        }
+      }
+    }
+    
+    return result
+  }
+
   const applyDithering = (
     imageData: ImageData,
     palette: number[][],
@@ -302,7 +539,13 @@ function App() {
         scaledCtx.drawImage(tempCanvas, 0, 0, targetWidth, targetHeight)
 
         // Get image data and apply palette/dithering
-        const imageData = scaledCtx.getImageData(0, 0, targetWidth, targetHeight)
+        let imageData = scaledCtx.getImageData(0, 0, targetWidth, targetHeight)
+        
+        // Remove background if enabled
+        if (removeBackground) {
+          imageData = removeBackgroundFromImage(imageData, targetWidth, targetHeight)
+        }
+        
         const palette = generatePalette(imageData, paletteSize)
         const processedData = applyDithering(imageData, palette, targetWidth, targetHeight)
 
@@ -468,18 +711,30 @@ function App() {
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,video/mp4"
         onChange={handleFileUpload}
         style={{ display: 'none' }}
+        disabled={isProcessingVideo}
       />
+
+      {isProcessingVideo && (
+        <div className="video-progress">
+          <div className="progress-content">
+            <p>動画を処理中...</p>
+            <progress value={videoProgress.current} max={videoProgress.total} />
+            <p>{videoProgress.current} / {videoProgress.total} フレーム</p>
+          </div>
+        </div>
+      )}
 
       <div className="top-section">
         <div className="upload-section">
           <button
             className="upload-button"
             onClick={() => fileInputRef.current?.click()}
+            disabled={isProcessingVideo}
           >
-            スプライトシートを選択
+            {isProcessingVideo ? '処理中...' : '画像/動画を選択'}
           </button>
         </div>
 
@@ -544,6 +799,26 @@ function App() {
             />
             ディザリングを有効化
           </label>
+          <label>
+            背景を透過:
+            <input
+              type="checkbox"
+              checked={removeBackground}
+              onChange={(e) => setRemoveBackground(e.target.checked)}
+            />
+          </label>
+          {removeBackground && (
+            <label>
+              透過の許容値:
+              <input
+                type="number"
+                min="0"
+                max="50"
+                value={backgroundTolerance}
+                onChange={(e) => setBackgroundTolerance(parseInt(e.target.value) || 0)}
+              />
+            </label>
+          )}
           </div>
 
           <div className="control-group">
