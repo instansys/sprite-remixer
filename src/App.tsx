@@ -1,5 +1,7 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
+import { removeBackgroundFromImage, scaleImageNearestNeighbor, exportCanvasAsPNG } from './imageProcessing'
+import { NumberInput } from './NumberInput'
 
 interface FrameData {
   index: number
@@ -16,8 +18,6 @@ const STORAGE_KEYS = {
   srcRows: 'sprite-remixer-src-rows',
   targetWidth: 'sprite-remixer-target-width',
   targetHeight: 'sprite-remixer-target-height',
-  paletteSize: 'sprite-remixer-palette-size',
-  enableDithering: 'sprite-remixer-enable-dithering',
   fps: 'sprite-remixer-fps'
 }
 
@@ -35,8 +35,6 @@ function App() {
   const [srcRows, setSrcRows] = useState(() => loadSetting(STORAGE_KEYS.srcRows, 4) as number)
   const [targetWidth, setTargetWidth] = useState(() => loadSetting(STORAGE_KEYS.targetWidth, 32) as number)
   const [targetHeight, setTargetHeight] = useState(() => loadSetting(STORAGE_KEYS.targetHeight, 32) as number)
-  const [paletteSize, setPaletteSize] = useState(() => loadSetting(STORAGE_KEYS.paletteSize, 16) as number)
-  const [enableDithering, setEnableDithering] = useState(() => loadSetting(STORAGE_KEYS.enableDithering, true) as boolean)
   const [removeBackground, setRemoveBackground] = useState(false)
   const [backgroundTolerance, setBackgroundTolerance] = useState(10)
   const [processedImageUrl, setProcessedImageUrl] = useState<string | null>(null)
@@ -68,13 +66,6 @@ function App() {
     localStorage.setItem(STORAGE_KEYS.targetHeight, targetHeight.toString())
   }, [targetHeight])
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.paletteSize, paletteSize.toString())
-  }, [paletteSize])
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.enableDithering, enableDithering.toString())
-  }, [enableDithering])
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.fps, fps.toString())
@@ -131,11 +122,17 @@ function App() {
     const canvas = document.createElement('canvas')
     canvas.width = video.videoWidth
     canvas.height = video.videoHeight
-    const ctx = canvas.getContext('2d')
+    const ctx = canvas.getContext('2d', {
+      alpha: true,
+      colorSpace: 'srgb'
+    })
     if (!ctx) {
       setIsProcessingVideo(false)
       return
     }
+    
+    // Disable smoothing
+    ctx.imageSmoothingEnabled = false
     
     // Extract frames
     const extractedFrames: string[] = []
@@ -159,7 +156,7 @@ function App() {
       
       // Draw current frame to canvas
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-      extractedFrames.push(canvas.toDataURL())
+      extractedFrames.push(exportCanvasAsPNG(canvas))
       
       setVideoProgress({ current: i + 1, total: samplesToTake })
       
@@ -178,8 +175,14 @@ function App() {
     const spriteCanvas = document.createElement('canvas')
     spriteCanvas.width = frameWidth * cols
     spriteCanvas.height = frameHeight * rows
-    const spriteCtx = spriteCanvas.getContext('2d')
+    const spriteCtx = spriteCanvas.getContext('2d', {
+      alpha: true,
+      colorSpace: 'srgb'
+    })
     if (!spriteCtx) return
+    
+    // Disable smoothing
+    spriteCtx.imageSmoothingEnabled = false
     
     // Draw all frames to sprite sheet
     for (let i = 0; i < frames.length; i++) {
@@ -201,7 +204,7 @@ function App() {
     }
     
     // Set the sprite sheet as the original image
-    setOriginalImage(spriteCanvas.toDataURL())
+    setOriginalImage(exportCanvasAsPNG(spriteCanvas))
     setSrcCols(cols)
     setSrcRows(rows)
     
@@ -209,7 +212,7 @@ function App() {
     generateFrames(spriteCanvas.width, spriteCanvas.height)
   }
 
-  const generateFrames = (imageWidth: number, imageHeight: number) => {
+  const generateFrames = useCallback((imageWidth: number, imageHeight: number) => {
     const frameWidth = imageWidth / srcCols
     const frameHeight = imageHeight / srcRows
     const newFrames: FrameData[] = []
@@ -229,7 +232,7 @@ function App() {
     }
 
     setFrames(newFrames)
-  }
+  }, [srcCols, srcRows])
 
   const toggleFrame = (index: number) => {
     setFrames(prev => prev.map(frame => 
@@ -245,247 +248,8 @@ function App() {
     setFrames(prev => prev.map(frame => ({ ...frame, selected: false })))
   }
 
-  const quantizeColor = (r: number, g: number, b: number, palette: number[][]): number[] => {
-    let minDistance = Infinity
-    let closestColor = [0, 0, 0]
 
-    for (const color of palette) {
-      const distance = Math.sqrt(
-        Math.pow(r - color[0], 2) +
-        Math.pow(g - color[1], 2) +
-        Math.pow(b - color[2], 2)
-      )
-      if (distance < minDistance) {
-        minDistance = distance
-        closestColor = color
-      }
-    }
 
-    return closestColor
-  }
-
-  const generatePalette = (imageData: ImageData, size: number): number[][] => {
-    const pixels: number[][] = []
-    for (let i = 0; i < imageData.data.length; i += 4) {
-      if (imageData.data[i + 3] > 0) { // Only consider non-transparent pixels
-        pixels.push([
-          imageData.data[i],
-          imageData.data[i + 1],
-          imageData.data[i + 2]
-        ])
-      }
-    }
-
-    if (pixels.length === 0) return [[0, 0, 0]]
-
-    const palette: number[][] = []
-    const buckets = [pixels]
-
-    while (palette.length < size && buckets.length > 0) {
-      const bucket = buckets.shift()!
-      if (bucket.length === 0) continue
-
-      if (palette.length + buckets.length + 1 >= size) {
-        const avg = [0, 0, 0]
-        for (const pixel of bucket) {
-          avg[0] += pixel[0]
-          avg[1] += pixel[1]
-          avg[2] += pixel[2]
-        }
-        avg[0] = Math.round(avg[0] / bucket.length)
-        avg[1] = Math.round(avg[1] / bucket.length)
-        avg[2] = Math.round(avg[2] / bucket.length)
-        palette.push(avg)
-      } else {
-        const ranges = [0, 1, 2].map(channel => {
-          const values = bucket.map(p => p[channel])
-          return Math.max(...values) - Math.min(...values)
-        })
-        const maxChannel = ranges.indexOf(Math.max(...ranges))
-
-        bucket.sort((a, b) => a[maxChannel] - b[maxChannel])
-        const mid = Math.floor(bucket.length / 2)
-        buckets.push(bucket.slice(0, mid))
-        buckets.push(bucket.slice(mid))
-      }
-    }
-
-    return palette
-  }
-
-  const detectBackgroundColor = (imageData: ImageData, width: number, height: number): number[] => {
-    // Sample colors from the edges
-    const edgeColors: Map<string, number> = new Map()
-    
-    // Top and bottom edges
-    for (let x = 0; x < width; x++) {
-      const topIdx = x * 4
-      const bottomIdx = ((height - 1) * width + x) * 4
-      
-      const topColor = `${imageData.data[topIdx]},${imageData.data[topIdx + 1]},${imageData.data[topIdx + 2]}`
-      const bottomColor = `${imageData.data[bottomIdx]},${imageData.data[bottomIdx + 1]},${imageData.data[bottomIdx + 2]}`
-      
-      edgeColors.set(topColor, (edgeColors.get(topColor) || 0) + 1)
-      edgeColors.set(bottomColor, (edgeColors.get(bottomColor) || 0) + 1)
-    }
-    
-    // Left and right edges
-    for (let y = 0; y < height; y++) {
-      const leftIdx = y * width * 4
-      const rightIdx = (y * width + width - 1) * 4
-      
-      const leftColor = `${imageData.data[leftIdx]},${imageData.data[leftIdx + 1]},${imageData.data[leftIdx + 2]}`
-      const rightColor = `${imageData.data[rightIdx]},${imageData.data[rightIdx + 1]},${imageData.data[rightIdx + 2]}`
-      
-      edgeColors.set(leftColor, (edgeColors.get(leftColor) || 0) + 1)
-      edgeColors.set(rightColor, (edgeColors.get(rightColor) || 0) + 1)
-    }
-    
-    // Find most common edge color
-    let maxCount = 0
-    let bgColor = '0,0,0'
-    
-    edgeColors.forEach((count, color) => {
-      if (count > maxCount) {
-        maxCount = count
-        bgColor = color
-      }
-    })
-    
-    return bgColor.split(',').map(c => parseInt(c))
-  }
-
-  const removeBackgroundFromImage = (imageData: ImageData, width: number, height: number): ImageData => {
-    const bgColor = detectBackgroundColor(imageData, width, height)
-    const tolerance = backgroundTolerance
-    const result = new ImageData(width, height)
-    const visited = new Set<number>()
-    
-    // Color similarity check
-    const isColorSimilar = (idx: number): boolean => {
-      const r = imageData.data[idx]
-      const g = imageData.data[idx + 1]
-      const b = imageData.data[idx + 2]
-      
-      return Math.abs(r - bgColor[0]) <= tolerance &&
-             Math.abs(g - bgColor[1]) <= tolerance &&
-             Math.abs(b - bgColor[2]) <= tolerance
-    }
-    
-    // Flood fill from edges
-    const floodFill = (startX: number, startY: number) => {
-      const queue: [number, number][] = [[startX, startY]]
-      
-      while (queue.length > 0) {
-        const [x, y] = queue.shift()!
-        const idx = (y * width + x) * 4
-        const pixelKey = y * width + x
-        
-        if (x < 0 || x >= width || y < 0 || y >= height || visited.has(pixelKey)) {
-          continue
-        }
-        
-        visited.add(pixelKey)
-        
-        if (isColorSimilar(idx)) {
-          // Mark as transparent
-          result.data[idx] = imageData.data[idx]
-          result.data[idx + 1] = imageData.data[idx + 1]
-          result.data[idx + 2] = imageData.data[idx + 2]
-          result.data[idx + 3] = 0 // Set alpha to 0
-          
-          // Add neighbors
-          queue.push([x + 1, y])
-          queue.push([x - 1, y])
-          queue.push([x, y + 1])
-          queue.push([x, y - 1])
-        } else {
-          // Keep original pixel
-          result.data[idx] = imageData.data[idx]
-          result.data[idx + 1] = imageData.data[idx + 1]
-          result.data[idx + 2] = imageData.data[idx + 2]
-          result.data[idx + 3] = imageData.data[idx + 3]
-        }
-      }
-    }
-    
-    // Start flood fill from all edges
-    for (let x = 0; x < width; x++) {
-      floodFill(x, 0) // Top edge
-      floodFill(x, height - 1) // Bottom edge
-    }
-    for (let y = 0; y < height; y++) {
-      floodFill(0, y) // Left edge
-      floodFill(width - 1, y) // Right edge
-    }
-    
-    // Copy remaining pixels
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const idx = (y * width + x) * 4
-        const pixelKey = y * width + x
-        if (!visited.has(pixelKey)) {
-          result.data[idx] = imageData.data[idx]
-          result.data[idx + 1] = imageData.data[idx + 1]
-          result.data[idx + 2] = imageData.data[idx + 2]
-          result.data[idx + 3] = imageData.data[idx + 3]
-        }
-      }
-    }
-    
-    return result
-  }
-
-  const applyDithering = (
-    imageData: ImageData,
-    palette: number[][],
-    width: number,
-    height: number
-  ): ImageData => {
-    const result = new ImageData(width, height)
-    const data = new Uint8ClampedArray(imageData.data)
-
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const idx = (y * width + x) * 4
-        const oldColor = [data[idx], data[idx + 1], data[idx + 2]]
-        const newColor = quantizeColor(oldColor[0], oldColor[1], oldColor[2], palette)
-
-        result.data[idx] = newColor[0]
-        result.data[idx + 1] = newColor[1]
-        result.data[idx + 2] = newColor[2]
-        result.data[idx + 3] = data[idx + 3]
-
-        if (enableDithering && data[idx + 3] > 0) {
-          const error = [
-            oldColor[0] - newColor[0],
-            oldColor[1] - newColor[1],
-            oldColor[2] - newColor[2]
-          ]
-
-          const distributeError = (dx: number, dy: number, factor: number) => {
-            const nx = x + dx
-            const ny = y + dy
-            if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-              const nidx = (ny * width + nx) * 4
-              if (data[nidx + 3] > 0) {
-                data[nidx] = Math.min(255, Math.max(0, data[nidx] + error[0] * factor))
-                data[nidx + 1] = Math.min(255, Math.max(0, data[nidx + 1] + error[1] * factor))
-                data[nidx + 2] = Math.min(255, Math.max(0, data[nidx + 2] + error[2] * factor))
-              }
-            }
-          }
-
-          distributeError(1, 0, 7/16)
-          distributeError(-1, 1, 3/16)
-          distributeError(0, 1, 5/16)
-          distributeError(1, 1, 1/16)
-        }
-      }
-    }
-
-    return result
-  }
 
   const processSprites = async () => {
     if (!originalImage || frames.length === 0) return
@@ -501,8 +265,16 @@ function App() {
       const resultCanvas = document.createElement('canvas')
       resultCanvas.width = outputCols * targetWidth
       resultCanvas.height = outputRows * targetHeight
-      const ctx = resultCanvas.getContext('2d')
+      const ctx = resultCanvas.getContext('2d', {
+        alpha: true,
+        colorSpace: 'srgb',
+        willReadFrequently: true
+      })
       if (!ctx) return
+      
+      // Disable smoothing for pixel-perfect rendering
+      ctx.imageSmoothingEnabled = false
+      ctx.imageSmoothingQuality = 'low'
 
       selectedFrames.forEach((frame, idx) => {
         const destCol = idx % outputCols
@@ -512,8 +284,16 @@ function App() {
         const tempCanvas = document.createElement('canvas')
         tempCanvas.width = frame.width
         tempCanvas.height = frame.height
-        const tempCtx = tempCanvas.getContext('2d')
+        const tempCtx = tempCanvas.getContext('2d', {
+          alpha: true,
+          colorSpace: 'srgb',
+          willReadFrequently: true
+        })
         if (!tempCtx) return
+        
+        // Disable smoothing
+        tempCtx.imageSmoothingEnabled = false
+        tempCtx.imageSmoothingQuality = 'low'
 
         // Draw original frame
         tempCtx.drawImage(
@@ -528,29 +308,17 @@ function App() {
           frame.height
         )
 
-        // Scale down to target size using nearest neighbor
-        const scaledCanvas = document.createElement('canvas')
-        scaledCanvas.width = targetWidth
-        scaledCanvas.height = targetHeight
+        // Scale down to target size using nearest neighbor interpolation
+        const scaledCanvas = scaleImageNearestNeighbor(tempCanvas, targetWidth, targetHeight)
         const scaledCtx = scaledCanvas.getContext('2d')
         if (!scaledCtx) return
 
-        scaledCtx.imageSmoothingEnabled = false
-        scaledCtx.drawImage(tempCanvas, 0, 0, targetWidth, targetHeight)
-
-        // Get image data and apply palette/dithering
-        let imageData = scaledCtx.getImageData(0, 0, targetWidth, targetHeight)
-        
         // Remove background if enabled
         if (removeBackground) {
-          imageData = removeBackgroundFromImage(imageData, targetWidth, targetHeight)
+          const imageData = scaledCtx.getImageData(0, 0, targetWidth, targetHeight)
+          const processedData = removeBackgroundFromImage(imageData, targetWidth, targetHeight, backgroundTolerance)
+          scaledCtx.putImageData(processedData, 0, 0)
         }
-        
-        const palette = generatePalette(imageData, paletteSize)
-        const processedData = applyDithering(imageData, palette, targetWidth, targetHeight)
-
-        // Put processed data back
-        scaledCtx.putImageData(processedData, 0, 0)
 
         // Draw to result canvas
         ctx.drawImage(
@@ -566,7 +334,7 @@ function App() {
         )
       })
 
-      setProcessedImageUrl(resultCanvas.toDataURL())
+      setProcessedImageUrl(exportCanvasAsPNG(resultCanvas))
     }
     img.src = originalImage
   }
@@ -644,7 +412,7 @@ function App() {
       }
       img.src = originalImage
     }
-  }, [srcCols, srcRows, originalImage])
+  }, [srcCols, srcRows, originalImage, generateFrames])
 
   useEffect(() => {
     if (animationCanvasRef.current) {
@@ -659,8 +427,6 @@ function App() {
       srcRows,
       targetWidth,
       targetHeight,
-      paletteSize,
-      enableDithering,
       fps
     }
     const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' })
@@ -684,8 +450,6 @@ function App() {
         if (settings.srcRows) setSrcRows(settings.srcRows)
         if (settings.targetWidth) setTargetWidth(settings.targetWidth)
         if (settings.targetHeight) setTargetHeight(settings.targetHeight)
-        if (settings.paletteSize) setPaletteSize(settings.paletteSize)
-        if (settings.enableDithering !== undefined) setEnableDithering(settings.enableDithering)
         if (settings.fps) setFps(settings.fps)
       } catch (error) {
         console.error('Failed to load settings:', error)
@@ -699,8 +463,6 @@ function App() {
     setSrcRows(4)
     setTargetWidth(32)
     setTargetHeight(32)
-    setPaletteSize(16)
-    setEnableDithering(true)
     setFps(12)
   }
 
@@ -743,20 +505,18 @@ function App() {
             <h3>元のスプライト設定</h3>
           <label>
             横のフレーム数:
-            <input
-              type="number"
-              min="1"
+            <NumberInput
+              min={1}
               value={srcCols}
-              onChange={(e) => setSrcCols(parseInt(e.target.value) || 1)}
+              onChange={setSrcCols}
             />
           </label>
           <label>
             縦のフレーム数:
-            <input
-              type="number"
-              min="1"
+            <NumberInput
+              min={1}
               value={srcRows}
-              onChange={(e) => setSrcRows(parseInt(e.target.value) || 1)}
+              onChange={setSrcRows}
             />
           </label>
         </div>
@@ -765,39 +525,19 @@ function App() {
           <h3>ターゲット設定</h3>
           <label>
             ターゲット幅 (px):
-            <input
-              type="number"
-              min="8"
+            <NumberInput
+              min={8}
               value={targetWidth}
-              onChange={(e) => setTargetWidth(parseInt(e.target.value) || 8)}
+              onChange={setTargetWidth}
             />
           </label>
           <label>
             ターゲット高さ (px):
-            <input
-              type="number"
-              min="8"
+            <NumberInput
+              min={8}
               value={targetHeight}
-              onChange={(e) => setTargetHeight(parseInt(e.target.value) || 8)}
+              onChange={setTargetHeight}
             />
-          </label>
-          <label>
-            パレット色数:
-            <input
-              type="number"
-              min="2"
-              max="256"
-              value={paletteSize}
-              onChange={(e) => setPaletteSize(parseInt(e.target.value) || 2)}
-            />
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={enableDithering}
-              onChange={(e) => setEnableDithering(e.target.checked)}
-            />
-            ディザリングを有効化
           </label>
           <label>
             背景を透過:
@@ -810,12 +550,11 @@ function App() {
           {removeBackground && (
             <label>
               透過の許容値:
-              <input
-                type="number"
-                min="0"
-                max="50"
+              <NumberInput
+                min={0}
+                max={50}
                 value={backgroundTolerance}
-                onChange={(e) => setBackgroundTolerance(parseInt(e.target.value) || 0)}
+                onChange={setBackgroundTolerance}
               />
             </label>
           )}
@@ -910,12 +649,11 @@ function App() {
                     </button>
                     <label>
                       FPS:
-                      <input
-                        type="number"
-                        min="1"
-                        max="60"
+                      <NumberInput
+                        min={1}
+                        max={60}
                         value={fps}
-                        onChange={(e) => setFps(parseInt(e.target.value) || 1)}
+                        onChange={setFps}
                       />
                     </label>
                   </div>
