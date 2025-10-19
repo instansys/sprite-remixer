@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import { removeBackgroundFromImage, scaleImageNearestNeighbor, exportCanvasAsPNG } from './imageProcessing'
 import { NumberInput } from './NumberInput'
+import { parseGIF, decompressFrames } from 'gifuct-js'
 
 interface FrameData {
   index: number
@@ -78,13 +79,16 @@ function App() {
     // Check if it's a video file
     if (file.type.startsWith('video/')) {
       handleVideoUpload(file)
+    } else if (file.type === 'image/gif') {
+      // Handle GIF file
+      handleGifUpload(file)
     } else {
       // Handle image file as before
       const reader = new FileReader()
       reader.onload = (event) => {
         const imageUrl = event.target?.result as string
         setOriginalImage(imageUrl)
-        
+
         // Create image to get dimensions
         const img = new Image()
         img.onload = () => {
@@ -167,7 +171,161 @@ function App() {
     // Start processing
     processFrame(0)
   }
-  
+
+  // Helper function to check if a canvas is mostly empty/transparent
+  const isCanvasEmpty = (canvas: HTMLCanvasElement, threshold: number = 0.01): boolean => {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    if (!ctx) return true
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const data = imageData.data
+    let opaquePixels = 0
+    const totalPixels = canvas.width * canvas.height
+
+    // Count pixels with alpha > 10
+    for (let i = 3; i < data.length; i += 4) {
+      if (data[i] > 10) {
+        opaquePixels++
+      }
+    }
+
+    // If less than threshold% of pixels are opaque, consider it empty
+    return (opaquePixels / totalPixels) < threshold
+  }
+
+  const handleGifUpload = async (file: File) => {
+    setIsProcessingVideo(true)
+    setVideoProgress({ current: 0, total: 0 })
+
+    try {
+      // Read file as ArrayBuffer
+      const buffer = await file.arrayBuffer()
+
+      // Parse GIF
+      const gif = parseGIF(buffer)
+      const gifFrames = decompressFrames(gif, true)
+
+      if (gifFrames.length === 0) {
+        setIsProcessingVideo(false)
+        return
+      }
+
+      setVideoProgress({ current: 0, total: gifFrames.length })
+
+      // Get dimensions from first frame
+      const frameWidth = gifFrames[0].dims.width
+      const frameHeight = gifFrames[0].dims.height
+
+      // Canvas for accumulating frames
+      const canvas = document.createElement('canvas')
+      canvas.width = frameWidth
+      canvas.height = frameHeight
+      const ctx = canvas.getContext('2d', {
+        alpha: true,
+        colorSpace: 'srgb'
+      })
+      if (!ctx) {
+        setIsProcessingVideo(false)
+        return
+      }
+
+      // Disable smoothing
+      ctx.imageSmoothingEnabled = false
+
+      // Canvas for saving previous frame (for disposalType 3)
+      const prevCanvas = document.createElement('canvas')
+      prevCanvas.width = frameWidth
+      prevCanvas.height = frameHeight
+      const prevCtx = prevCanvas.getContext('2d', {
+        alpha: true,
+        colorSpace: 'srgb'
+      })
+      if (!prevCtx) {
+        setIsProcessingVideo(false)
+        return
+      }
+      prevCtx.imageSmoothingEnabled = false
+
+      // Extract all frames
+      const extractedFrames: string[] = []
+
+      // Process frames
+      for (let i = 0; i < gifFrames.length; i++) {
+        const frame = gifFrames[i]
+
+        // Save current state BEFORE drawing (for disposalType 3 to restore later)
+        if (frame.disposalType === 3) {
+          prevCtx.clearRect(0, 0, frameWidth, frameHeight)
+          prevCtx.drawImage(canvas, 0, 0)
+        }
+
+        // Create a temporary canvas for this frame's patch
+        const tempCanvas = document.createElement('canvas')
+        tempCanvas.width = frame.dims.width
+        tempCanvas.height = frame.dims.height
+        const tempCtx = tempCanvas.getContext('2d', {
+          alpha: true,
+          colorSpace: 'srgb'
+        })
+        if (!tempCtx) continue
+
+        tempCtx.imageSmoothingEnabled = false
+
+        // Create ImageData from frame patch
+        const imageData = new ImageData(
+          new Uint8ClampedArray(frame.patch),
+          frame.dims.width,
+          frame.dims.height
+        )
+
+        // Put the patch data on the temporary canvas
+        tempCtx.putImageData(imageData, 0, 0)
+
+        // Draw the patch onto the main canvas at the correct position
+        // This properly handles alpha blending
+        ctx.drawImage(
+          tempCanvas,
+          0, 0, frame.dims.width, frame.dims.height,
+          frame.dims.left, frame.dims.top, frame.dims.width, frame.dims.height
+        )
+
+        // Check if the current frame is mostly empty and skip if so
+        if (!isCanvasEmpty(canvas)) {
+          // Export current canvas state as PNG only if not empty
+          extractedFrames.push(exportCanvasAsPNG(canvas))
+        }
+
+        // Apply disposal method AFTER exporting the frame
+        if (frame.disposalType === 2) {
+          // Clear to background (transparent)
+          ctx.clearRect(
+            frame.dims.left,
+            frame.dims.top,
+            frame.dims.width,
+            frame.dims.height
+          )
+        } else if (frame.disposalType === 3) {
+          // Restore to previous state (before this frame was drawn)
+          ctx.clearRect(0, 0, frameWidth, frameHeight)
+          ctx.drawImage(prevCanvas, 0, 0)
+        }
+        // disposalType 0 or 1: do nothing (keep current canvas state for next frame)
+
+        setVideoProgress({ current: i + 1, total: gifFrames.length })
+
+        // Small delay to keep UI responsive
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+
+      // Create sprite sheet from extracted frames
+      await createSpriteSheet(extractedFrames, frameWidth, frameHeight)
+      setIsProcessingVideo(false)
+    } catch (error) {
+      console.error('Failed to process GIF:', error)
+      setIsProcessingVideo(false)
+    }
+  }
+
   const createSpriteSheet = async (frames: string[], frameWidth: number, frameHeight: number) => {
     const cols = Math.ceil(Math.sqrt(frames.length))
     const rows = Math.ceil(frames.length / cols)
@@ -482,7 +640,7 @@ function App() {
       {isProcessingVideo && (
         <div className="video-progress">
           <div className="progress-content">
-            <p>動画を処理中...</p>
+            <p>動画/GIFを処理中...</p>
             <progress value={videoProgress.current} max={videoProgress.total} />
             <p>{videoProgress.current} / {videoProgress.total} フレーム</p>
           </div>
