@@ -7,6 +7,7 @@ interface ProcessSpritesOptions {
   selectedFrames: FrameData[]
   targetWidth: number
   targetHeight: number
+  outputCols: number
   removeBackground: boolean
   backgroundTolerance: number
   edgeErosion: number
@@ -19,6 +20,7 @@ export async function processSprites(options: ProcessSpritesOptions): Promise<st
     selectedFrames,
     targetWidth,
     targetHeight,
+    outputCols: outputColsSetting,
     removeBackground,
     backgroundTolerance,
     edgeErosion,
@@ -44,8 +46,8 @@ export async function processSprites(options: ProcessSpritesOptions): Promise<st
     })
   )
 
-  // Calculate output layout
-  const outputCols = Math.ceil(Math.sqrt(selectedFrames.length))
+  // Calculate output layout (0 = auto)
+  const outputCols = outputColsSetting > 0 ? outputColsSetting : Math.ceil(Math.sqrt(selectedFrames.length))
   const outputRows = Math.ceil(selectedFrames.length / outputCols)
 
   const resultCanvas = document.createElement('canvas')

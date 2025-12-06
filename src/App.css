@@ -246,6 +246,23 @@ h1 {
   margin-bottom: 0;
 }
 
+.control-group .hint {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-left: 0.5rem;
+}
+
+.sheet-size-info {
+  margin-top: 0.75rem;
+  padding: 0.625rem 0.875rem;
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  color: var(--accent-primary-hover);
+  font-weight: 500;
+}
+
 .control-group input[type="number"] {
   width: 80px;
   padding: 0.5rem 0.75rem;

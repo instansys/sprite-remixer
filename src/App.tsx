@@ -33,6 +33,7 @@ function App() {
   const [srcRows, setSrcRows] = useLocalStorage(STORAGE_KEYS.srcRows, DEFAULT_SETTINGS.srcRows)
   const [targetWidth, setTargetWidth] = useLocalStorage(STORAGE_KEYS.targetWidth, DEFAULT_SETTINGS.targetWidth)
   const [targetHeight, setTargetHeight] = useLocalStorage(STORAGE_KEYS.targetHeight, DEFAULT_SETTINGS.targetHeight)
+  const [outputCols, setOutputCols] = useLocalStorage(STORAGE_KEYS.outputCols, DEFAULT_SETTINGS.outputCols)
   const [fps, setFps] = useLocalStorage(STORAGE_KEYS.fps, DEFAULT_SETTINGS.fps)
   const [frameSamplingQuality, setFrameSamplingQuality] = useLocalStorageString<FrameSamplingQuality>(
     STORAGE_KEYS.frameSamplingQuality,
@@ -243,6 +244,7 @@ function App() {
       selectedFrames,
       targetWidth,
       targetHeight,
+      outputCols,
       removeBackground,
       backgroundTolerance,
       edgeErosion,
@@ -359,9 +361,12 @@ function App() {
               targetWidth={targetWidth}
               targetHeight={targetHeight}
               lockAspectRatio={lockAspectRatio}
+              outputCols={outputCols}
+              selectedFrameCount={selectedCount}
               onWidthChange={setTargetWidth}
               onHeightChange={setTargetHeight}
               onLockAspectRatioChange={handleLockAspectRatioChange}
+              onOutputColsChange={setOutputCols}
             />
 
             <BackgroundRemovalSettings

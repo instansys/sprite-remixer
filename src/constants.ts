@@ -12,6 +12,7 @@ export const STORAGE_KEYS = {
   srcRows: 'sprite-remixer-src-rows',
   targetWidth: 'sprite-remixer-target-width',
   targetHeight: 'sprite-remixer-target-height',
+  outputCols: 'sprite-remixer-output-cols',
   fps: 'sprite-remixer-fps',
   frameSamplingQuality: 'sprite-remixer-frame-sampling-quality'
 } as const
@@ -21,6 +22,7 @@ export const DEFAULT_SETTINGS = {
   srcRows: 4,
   targetWidth: 32,
   targetHeight: 32,
+  outputCols: 0, // 0 = auto
   fps: 12,
   frameSamplingQuality: 'medium' as FrameSamplingQuality
 } as const
