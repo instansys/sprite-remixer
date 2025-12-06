@@ -58,3 +58,6 @@ Sprite Remixerは、高解像度のスプライトシートをドット絵風に
 - Canvas APIで`imageSmoothingEnabled = false`を使用してピクセルパーフェクトなレンダリングを実現
 - GIF解析にはgifuct-jsライブラリを使用し、適切なdisposalメソッドを処理
 - 設定は`sprite-remixer-*`プレフィックスのキーでlocalStorageに永続化
+
+## 特記事項
+- 開発サーバーはユーザーが起動するのであなたが起動する必要はありません

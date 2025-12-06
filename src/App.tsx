@@ -28,13 +28,30 @@ interface PendingImage {
   imageUrl: string
 }
 
+// Frame sampling quality options
+type FrameSamplingQuality = 'low' | 'medium' | 'high' | 'ultra'
+
+interface SamplingConfig {
+  label: string
+  sampleInterval: number // フレーム間隔
+  maxFrames: number // 最大フレーム数
+}
+
+const SAMPLING_CONFIGS: Record<FrameSamplingQuality, SamplingConfig> = {
+  low: { label: '低 (軽い)', sampleInterval: 15, maxFrames: 30 },
+  medium: { label: '中 (標準)', sampleInterval: 10, maxFrames: 50 },
+  high: { label: '高 (詳細)', sampleInterval: 5, maxFrames: 100 },
+  ultra: { label: '最高 (全)', sampleInterval: 2, maxFrames: 200 }
+}
+
 // Local storage keys
 const STORAGE_KEYS = {
   srcCols: 'sprite-remixer-src-cols',
   srcRows: 'sprite-remixer-src-rows',
   targetWidth: 'sprite-remixer-target-width',
   targetHeight: 'sprite-remixer-target-height',
-  fps: 'sprite-remixer-fps'
+  fps: 'sprite-remixer-fps',
+  frameSamplingQuality: 'sprite-remixer-frame-sampling-quality'
 }
 
 function App() {
@@ -63,12 +80,18 @@ function App() {
   const [currentFrame, setCurrentFrame] = useState(0)
   const [isProcessingVideo, setIsProcessingVideo] = useState(false)
   const [videoProgress, setVideoProgress] = useState({ current: 0, total: 0 })
+  const [isGeneratingFrames, setIsGeneratingFrames] = useState(false)
+  const [frameSamplingQuality, setFrameSamplingQuality] = useState<FrameSamplingQuality>(() => {
+    const stored = localStorage.getItem(STORAGE_KEYS.frameSamplingQuality)
+    return (stored as FrameSamplingQuality) || 'medium'
+  })
 
   // ソース設定ダイアログ用のステート
   const [showSourceDialog, setShowSourceDialog] = useState(false)
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null)
   const [dialogCols, setDialogCols] = useState(srcCols)
   const [dialogRows, setDialogRows] = useState(srcRows)
+  const [isDialogProcessing, setIsDialogProcessing] = useState(false)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const animationCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -106,6 +129,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.fps, fps.toString())
   }, [fps])
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.frameSamplingQuality, frameSamplingQuality)
+  }, [frameSamplingQuality])
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
@@ -151,8 +178,13 @@ function App() {
   }
 
   // ダイアログで確定した時の処理
-  const confirmSourceSettings = () => {
+  const confirmSourceSettings = async () => {
     if (!pendingImage) return
+
+    setIsDialogProcessing(true)
+
+    // Allow UI to update with loading state
+    await new Promise(resolve => setTimeout(resolve, 0))
 
     const newSource: SourceImage = {
       id: `source-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
@@ -165,8 +197,23 @@ function App() {
     setSourceImages(prev => [...prev, newSource])
     setSrcCols(dialogCols)
     setSrcRows(dialogRows)
-    setShowSourceDialog(false)
-    setPendingImage(null)
+
+    // Wait for frame generation to complete
+    await new Promise(resolve => {
+      const checkGeneration = () => {
+        requestAnimationFrame(() => {
+          // The useEffect will trigger generateAllFrames which sets isGeneratingFrames
+          // We wait a bit for it to finish
+          setTimeout(() => {
+            setIsDialogProcessing(false)
+            setShowSourceDialog(false)
+            setPendingImage(null)
+            resolve(undefined)
+          }, 100)
+        })
+      }
+      checkGeneration()
+    })
   }
 
   // ダイアログをキャンセルした時の処理
@@ -178,25 +225,28 @@ function App() {
   const handleVideoUpload = async (file: File) => {
     setIsProcessingVideo(true)
     setVideoProgress({ current: 0, total: 0 })
-    
+
     const videoUrl = URL.createObjectURL(file)
     const video = document.createElement('video')
     video.src = videoUrl
     video.muted = true
-    
+
     // Wait for video metadata to load
     await new Promise((resolve) => {
       video.addEventListener('loadedmetadata', resolve, { once: true })
     })
-    
+
     const duration = video.duration
     const fps = 30 // Assume 30fps for sampling calculation
     const totalFrames = Math.floor(duration * fps)
-    const sampleInterval = 10 // Sample every 10 frames
-    const samplesToTake = Math.min(Math.floor(totalFrames / sampleInterval), 50) // Max 50 samples
-    
+
+    // Use sampling config based on selected quality
+    const samplingConfig = SAMPLING_CONFIGS[frameSamplingQuality]
+    const sampleInterval = samplingConfig.sampleInterval
+    const samplesToTake = Math.min(Math.floor(totalFrames / sampleInterval), samplingConfig.maxFrames)
+
     setVideoProgress({ current: 0, total: samplesToTake })
-    
+
     // Canvas for extracting frames
     const canvas = document.createElement('canvas')
     canvas.width = video.videoWidth
@@ -209,42 +259,41 @@ function App() {
       setIsProcessingVideo(false)
       return
     }
-    
+
     // Disable smoothing
     ctx.imageSmoothingEnabled = false
-    
-    // Extract frames
+
+    // Extract frames with proper async/await to avoid blocking
     const extractedFrames: string[] = []
-    
-    // Process frames in chunks to avoid blocking UI
-    const processFrame = async (i: number) => {
-      if (i >= samplesToTake) {
-        // All frames processed, create sprite sheet
-        await createSpriteSheet(extractedFrames, video.videoWidth, video.videoHeight, file.name)
-        URL.revokeObjectURL(videoUrl)
-        setIsProcessingVideo(false)
-        return
+
+    const BATCH_SIZE = 5 // Process 5 frames per batch
+    for (let batchStart = 0; batchStart < samplesToTake; batchStart += BATCH_SIZE) {
+      const batchEnd = Math.min(batchStart + BATCH_SIZE, samplesToTake)
+
+      // Process frames in this batch
+      for (let i = batchStart; i < batchEnd; i++) {
+        const time = (i * sampleInterval) / fps
+        video.currentTime = time
+
+        await new Promise((resolve) => {
+          video.addEventListener('seeked', resolve, { once: true })
+        })
+
+        // Draw current frame to canvas
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+        extractedFrames.push(exportCanvasAsPNG(canvas))
+
+        setVideoProgress({ current: i + 1, total: samplesToTake })
       }
-      
-      const time = (i * sampleInterval) / fps
-      video.currentTime = time
-      
-      await new Promise((resolve) => {
-        video.addEventListener('seeked', resolve, { once: true })
-      })
-      
-      // Draw current frame to canvas
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-      extractedFrames.push(exportCanvasAsPNG(canvas))
-      
-      setVideoProgress({ current: i + 1, total: samplesToTake })
-      
-      // Process next frame after a short delay to keep UI responsive
-      setTimeout(() => processFrame(i + 1), 10)
+
+      // Yield to browser after each batch
+      await new Promise(resolve => setTimeout(resolve, 0))
     }
-    
-    // Start processing
-    processFrame(0)
+
+    // All frames processed, create sprite sheet
+    await createSpriteSheet(extractedFrames, video.videoWidth, video.videoHeight, file.name)
+    URL.revokeObjectURL(videoUrl)
+    setIsProcessingVideo(false)
   }
 
   // Helper function to check if a canvas is mostly empty/transparent
@@ -324,72 +373,78 @@ function App() {
       // Extract all frames
       const extractedFrames: string[] = []
 
-      // Process frames
-      for (let i = 0; i < gifFrames.length; i++) {
-        const frame = gifFrames[i]
+      // Process frames in batches to avoid blocking UI
+      const BATCH_SIZE = 10 // Process 10 frames per batch
+      for (let batchStart = 0; batchStart < gifFrames.length; batchStart += BATCH_SIZE) {
+        const batchEnd = Math.min(batchStart + BATCH_SIZE, gifFrames.length)
 
-        // Save current state BEFORE drawing (for disposalType 3 to restore later)
-        if (frame.disposalType === 3) {
-          prevCtx.clearRect(0, 0, frameWidth, frameHeight)
-          prevCtx.drawImage(canvas, 0, 0)
-        }
+        // Process frames in this batch
+        for (let i = batchStart; i < batchEnd; i++) {
+          const frame = gifFrames[i]
 
-        // Create a temporary canvas for this frame's patch
-        const tempCanvas = document.createElement('canvas')
-        tempCanvas.width = frame.dims.width
-        tempCanvas.height = frame.dims.height
-        const tempCtx = tempCanvas.getContext('2d', {
-          alpha: true,
-          colorSpace: 'srgb'
-        })
-        if (!tempCtx) continue
+          // Save current state BEFORE drawing (for disposalType 3 to restore later)
+          if (frame.disposalType === 3) {
+            prevCtx.clearRect(0, 0, frameWidth, frameHeight)
+            prevCtx.drawImage(canvas, 0, 0)
+          }
 
-        tempCtx.imageSmoothingEnabled = false
+          // Create a temporary canvas for this frame's patch
+          const tempCanvas = document.createElement('canvas')
+          tempCanvas.width = frame.dims.width
+          tempCanvas.height = frame.dims.height
+          const tempCtx = tempCanvas.getContext('2d', {
+            alpha: true,
+            colorSpace: 'srgb'
+          })
+          if (!tempCtx) continue
 
-        // Create ImageData from frame patch
-        const imageData = new ImageData(
-          new Uint8ClampedArray(frame.patch),
-          frame.dims.width,
-          frame.dims.height
-        )
+          tempCtx.imageSmoothingEnabled = false
 
-        // Put the patch data on the temporary canvas
-        tempCtx.putImageData(imageData, 0, 0)
-
-        // Draw the patch onto the main canvas at the correct position
-        // This properly handles alpha blending
-        ctx.drawImage(
-          tempCanvas,
-          0, 0, frame.dims.width, frame.dims.height,
-          frame.dims.left, frame.dims.top, frame.dims.width, frame.dims.height
-        )
-
-        // Check if the current frame is mostly empty and skip if so
-        if (!isCanvasEmpty(canvas)) {
-          // Export current canvas state as PNG only if not empty
-          extractedFrames.push(exportCanvasAsPNG(canvas))
-        }
-
-        // Apply disposal method AFTER exporting the frame
-        if (frame.disposalType === 2) {
-          // Clear to background (transparent)
-          ctx.clearRect(
-            frame.dims.left,
-            frame.dims.top,
+          // Create ImageData from frame patch
+          const imageData = new ImageData(
+            new Uint8ClampedArray(frame.patch),
             frame.dims.width,
             frame.dims.height
           )
-        } else if (frame.disposalType === 3) {
-          // Restore to previous state (before this frame was drawn)
-          ctx.clearRect(0, 0, frameWidth, frameHeight)
-          ctx.drawImage(prevCanvas, 0, 0)
+
+          // Put the patch data on the temporary canvas
+          tempCtx.putImageData(imageData, 0, 0)
+
+          // Draw the patch onto the main canvas at the correct position
+          // This properly handles alpha blending
+          ctx.drawImage(
+            tempCanvas,
+            0, 0, frame.dims.width, frame.dims.height,
+            frame.dims.left, frame.dims.top, frame.dims.width, frame.dims.height
+          )
+
+          // Check if the current frame is mostly empty and skip if so
+          if (!isCanvasEmpty(canvas)) {
+            // Export current canvas state as PNG only if not empty
+            extractedFrames.push(exportCanvasAsPNG(canvas))
+          }
+
+          // Apply disposal method AFTER exporting the frame
+          if (frame.disposalType === 2) {
+            // Clear to background (transparent)
+            ctx.clearRect(
+              frame.dims.left,
+              frame.dims.top,
+              frame.dims.width,
+              frame.dims.height
+            )
+          } else if (frame.disposalType === 3) {
+            // Restore to previous state (before this frame was drawn)
+            ctx.clearRect(0, 0, frameWidth, frameHeight)
+            ctx.drawImage(prevCanvas, 0, 0)
+          }
+          // disposalType 0 or 1: do nothing (keep current canvas state for next frame)
+
+          setVideoProgress({ current: i + 1, total: gifFrames.length })
         }
-        // disposalType 0 or 1: do nothing (keep current canvas state for next frame)
 
-        setVideoProgress({ current: i + 1, total: gifFrames.length })
-
-        // Small delay to keep UI responsive
-        await new Promise(resolve => setTimeout(resolve, 10))
+        // Yield to browser after each batch
+        await new Promise(resolve => setTimeout(resolve, 0))
       }
 
       // Create sprite sheet from extracted frames
@@ -402,6 +457,11 @@ function App() {
   }
 
   const createSpriteSheet = async (extractedFrames: string[], frameWidth: number, frameHeight: number, fileName: string) => {
+    setIsGeneratingFrames(true)
+
+    // Allow UI to update
+    await new Promise(resolve => setTimeout(resolve, 0))
+
     const cols = Math.ceil(Math.sqrt(extractedFrames.length))
     const rows = Math.ceil(extractedFrames.length / cols)
 
@@ -412,28 +472,43 @@ function App() {
       alpha: true,
       colorSpace: 'srgb'
     })
-    if (!spriteCtx) return
+    if (!spriteCtx) {
+      setIsGeneratingFrames(false)
+      return
+    }
 
     // Disable smoothing
     spriteCtx.imageSmoothingEnabled = false
 
-    // Draw all frames to sprite sheet
-    for (let i = 0; i < extractedFrames.length; i++) {
-      const img = new Image()
-      img.src = extractedFrames[i]
-      await new Promise((resolve) => {
-        img.onload = resolve
-      })
+    // Draw all frames to sprite sheet in batches
+    const BATCH_SIZE = 10
+    for (let batchStart = 0; batchStart < extractedFrames.length; batchStart += BATCH_SIZE) {
+      const batchEnd = Math.min(batchStart + BATCH_SIZE, extractedFrames.length)
 
-      const col = i % cols
-      const row = Math.floor(i / cols)
-      spriteCtx.drawImage(
-        img,
-        col * frameWidth,
-        row * frameHeight,
-        frameWidth,
-        frameHeight
+      // Process batch
+      await Promise.all(
+        extractedFrames.slice(batchStart, batchEnd).map(async (frameSrc, idx) => {
+          const i = batchStart + idx
+          const img = new Image()
+          img.src = frameSrc
+          await new Promise((resolve) => {
+            img.onload = resolve
+          })
+
+          const col = i % cols
+          const row = Math.floor(i / cols)
+          spriteCtx.drawImage(
+            img,
+            col * frameWidth,
+            row * frameHeight,
+            frameWidth,
+            frameHeight
+          )
+        })
       )
+
+      // Yield to browser after each batch
+      await new Promise(resolve => setTimeout(resolve, 0))
     }
 
     // Add as new source image
@@ -449,21 +524,23 @@ function App() {
     // Set target size to match original frame dimensions
     setTargetWidth(frameWidth)
     setTargetHeight(frameHeight)
+    setIsGeneratingFrames(false)
   }
 
   // Generate frames from all source images
-  const generateAllFrames = useCallback(() => {
+  const generateAllFrames = useCallback(async () => {
+    setIsGeneratingFrames(true)
+
+    // Use requestAnimationFrame to allow UI to update with loading state
+    await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)))
+
     const newFrames: FrameData[] = []
     let globalIndex = 0
 
-    sourceImages.forEach((source, sourceIndex) => {
-      // Load image to get dimensions
-      const img = new Image()
-      img.src = source.imageUrl
-      // Note: This is sync because we need dimensions immediately
-      // In a real scenario, we'd precompute these
-
+    for (let sourceIndex = 0; sourceIndex < sourceImages.length; sourceIndex++) {
+      const source = sourceImages[sourceIndex]
       const frameCount = source.cols * source.rows
+
       for (let localIndex = 0; localIndex < frameCount; localIndex++) {
         const col = localIndex % source.cols
         const row = Math.floor(localIndex / source.cols)
@@ -479,10 +556,16 @@ function App() {
           sourceIndex
         })
         globalIndex++
+
+        // Yield to browser every 100 frames to keep UI responsive
+        if (globalIndex % 100 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 0))
+        }
       }
-    })
+    }
 
     setFrames(newFrames)
+    setIsGeneratingFrames(false)
   }, [sourceImages])
 
   const toggleFrame = (index: number) => {
@@ -779,7 +862,7 @@ function App() {
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*,video/mp4"
+        accept="image/*,video/mp4,video/quicktime"
         onChange={handleFileUpload}
         style={{ display: 'none' }}
         disabled={isProcessingVideo}
@@ -803,36 +886,45 @@ function App() {
             <div className="source-dialog-header">
               <h3>ソース設定</h3>
             </div>
-            <div className="source-dialog-preview">
-              <img src={pendingImage.imageUrl} alt="プレビュー" />
-            </div>
-            <div className="source-dialog-body">
-              <p className="source-dialog-filename">{pendingImage.file.name}</p>
-              <label>
-                横のフレーム数
-                <NumberInput
-                  min={1}
-                  value={dialogCols}
-                  onChange={setDialogCols}
-                />
-              </label>
-              <label>
-                縦のフレーム数
-                <NumberInput
-                  min={1}
-                  value={dialogRows}
-                  onChange={setDialogRows}
-                />
-              </label>
-            </div>
-            <div className="source-dialog-actions">
-              <button className="btn" onClick={cancelSourceSettings}>
-                キャンセル
-              </button>
-              <button className="btn btn-primary" onClick={confirmSourceSettings}>
-                追加
-              </button>
-            </div>
+            {isDialogProcessing ? (
+              <div className="loading-spinner">
+                <div className="spinner"></div>
+                <p>フレームを生成中...</p>
+              </div>
+            ) : (
+              <>
+                <div className="source-dialog-preview">
+                  <img src={pendingImage.imageUrl} alt="プレビュー" />
+                </div>
+                <div className="source-dialog-body">
+                  <p className="source-dialog-filename">{pendingImage.file.name}</p>
+                  <label>
+                    横のフレーム数
+                    <NumberInput
+                      min={1}
+                      value={dialogCols}
+                      onChange={setDialogCols}
+                    />
+                  </label>
+                  <label>
+                    縦のフレーム数
+                    <NumberInput
+                      min={1}
+                      value={dialogRows}
+                      onChange={setDialogRows}
+                    />
+                  </label>
+                </div>
+                <div className="source-dialog-actions">
+                  <button className="btn" onClick={cancelSourceSettings}>
+                    キャンセル
+                  </button>
+                  <button className="btn btn-primary" onClick={confirmSourceSettings}>
+                    追加
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -848,6 +940,34 @@ function App() {
             >
               {isProcessingVideo ? '⏳ 処理中...' : '📁 ファイルを追加'}
             </button>
+          </div>
+
+          {/* Frame Sampling Quality Selection for Video/GIF */}
+          <div className="control-group">
+            <h3>動画/GIF フレーム分割</h3>
+            <div className="button-group">
+              {(Object.keys(SAMPLING_CONFIGS) as FrameSamplingQuality[]).map((quality) => (
+                <button
+                  key={quality}
+                  className={`button-group-option ${frameSamplingQuality === quality ? 'selected' : ''}`}
+                  onClick={() => setFrameSamplingQuality(quality)}
+                  disabled={isProcessingVideo}
+                >
+                  {SAMPLING_CONFIGS[quality].label}
+                </button>
+              ))}
+            </div>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.5rem', marginBottom: 0 }}>
+              {SAMPLING_CONFIGS[frameSamplingQuality].sampleInterval}フレームごとにサンプリング (最大{SAMPLING_CONFIGS[frameSamplingQuality].maxFrames}フレーム)
+            </p>
+            {(frameSamplingQuality === 'high' || frameSamplingQuality === 'ultra') && (
+              <div className="quality-warning">
+                <span className="quality-warning-icon">⚠️</span>
+                <span>
+                  480p以上の高解像度動画では処理負荷が高くなります。フレーム数が多い場合、ブラウザが応答しなくなる可能性があります。
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="controls">
@@ -951,69 +1071,78 @@ function App() {
             <div className="card-header">
               <h3>🎞️ フレーム選択</h3>
             </div>
-            <div className="frame-controls">
-              <button onClick={selectAll}>全選択</button>
-              <button onClick={deselectAll}>全解除</button>
-              <span className="selected-count">
-                {frames.filter(f => f.selected).length} / {frames.length} 選択中
-              </span>
-            </div>
-
-            {/* Source images list with their frames */}
-            {sourceImages.map((source, sourceIdx) => {
-              const sourceFrames = frames.filter(f => f.sourceIndex === sourceIdx)
-              return (
-                <div key={source.id} className="source-section">
-                  <div className="source-header">
-                    <span className="source-name">{source.name}</span>
-                    <div className="source-controls">
-                      <label>
-                        横
-                        <NumberInput
-                          min={1}
-                          value={source.cols}
-                          onChange={(cols) => updateSourceSettings(source.id, cols, source.rows)}
-                        />
-                      </label>
-                      <label>
-                        縦
-                        <NumberInput
-                          min={1}
-                          value={source.rows}
-                          onChange={(rows) => updateSourceSettings(source.id, source.cols, rows)}
-                        />
-                      </label>
-                      <button
-                        className="remove-source-button"
-                        onClick={() => removeSource(source.id)}
-                        title="この素材を削除"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  </div>
-                  <div className="sprite-grid" style={{ '--frame-aspect-ratio': `${source.cols} / ${source.rows}` } as React.CSSProperties}>
-                    {sourceFrames.map((frame) => (
-                      <div
-                        key={frame.index}
-                        className={`sprite-frame ${frame.selected ? 'selected' : ''}`}
-                        onClick={() => toggleFrame(frame.index)}
-                      >
-                        <div
-                          className="sprite-frame-content"
-                          style={{
-                            backgroundImage: `url(${source.imageUrl})`,
-                            backgroundSize: `${source.cols * 100}% ${source.rows * 100}%`,
-                            backgroundPosition: `${-frame.x * 100}% ${-frame.y * 100}%`,
-                          }}
-                        />
-                        <div className="frame-number">{frame.localIndex + 1}</div>
-                      </div>
-                    ))}
-                  </div>
+            {isGeneratingFrames ? (
+              <div className="loading-spinner">
+                <div className="spinner"></div>
+                <p>フレームを生成中...</p>
+              </div>
+            ) : (
+              <>
+                <div className="frame-controls">
+                  <button onClick={selectAll}>全選択</button>
+                  <button onClick={deselectAll}>全解除</button>
+                  <span className="selected-count">
+                    {frames.filter(f => f.selected).length} / {frames.length} 選択中
+                  </span>
                 </div>
-              )
-            })}
+
+                {/* Source images list with their frames */}
+                {sourceImages.map((source, sourceIdx) => {
+                  const sourceFrames = frames.filter(f => f.sourceIndex === sourceIdx)
+                  return (
+                    <div key={source.id} className="source-section">
+                      <div className="source-header">
+                        <span className="source-name">{source.name}</span>
+                        <div className="source-controls">
+                          <label>
+                            横
+                            <NumberInput
+                              min={1}
+                              value={source.cols}
+                              onChange={(cols) => updateSourceSettings(source.id, cols, source.rows)}
+                            />
+                          </label>
+                          <label>
+                            縦
+                            <NumberInput
+                              min={1}
+                              value={source.rows}
+                              onChange={(rows) => updateSourceSettings(source.id, source.cols, rows)}
+                            />
+                          </label>
+                          <button
+                            className="remove-source-button"
+                            onClick={() => removeSource(source.id)}
+                            title="この素材を削除"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      </div>
+                      <div className="sprite-grid" style={{ '--frame-aspect-ratio': `${source.cols} / ${source.rows}` } as React.CSSProperties}>
+                        {sourceFrames.map((frame) => (
+                          <div
+                            key={frame.index}
+                            className={`sprite-frame ${frame.selected ? 'selected' : ''}`}
+                            onClick={() => toggleFrame(frame.index)}
+                          >
+                            <div
+                              className="sprite-frame-content"
+                              style={{
+                                backgroundImage: `url(${source.imageUrl})`,
+                                backgroundSize: `${source.cols * 100}% ${source.rows * 100}%`,
+                                backgroundPosition: `${-frame.x * 100}% ${-frame.y * 100}%`,
+                              }}
+                            />
+                            <div className="frame-number">{frame.localIndex + 1}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </>
+            )}
           </div>
 
           {/* Results Panel */}
