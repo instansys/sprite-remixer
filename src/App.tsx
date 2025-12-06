@@ -5,12 +5,22 @@ import { type BackgroundColorSource, exportCanvasAsPNG, removeBackgroundFromImag
 import { NumberInput } from './NumberInput'
 
 interface FrameData {
-  index: number
+  index: number // グローバルインデックス（全フレーム通し番号）
+  localIndex: number // ソース内でのインデックス
   x: number
   y: number
   width: number
   height: number
   selected: boolean
+  sourceIndex: number // どのソース画像からのフレームか
+}
+
+interface SourceImage {
+  id: string
+  name: string
+  imageUrl: string
+  cols: number
+  rows: number
 }
 
 // Local storage keys
@@ -30,7 +40,7 @@ function App() {
     return typeof defaultValue === 'boolean' ? stored === 'true' : parseInt(stored)
   }
 
-  const [originalImage, setOriginalImage] = useState<string | null>(null)
+  const [sourceImages, setSourceImages] = useState<SourceImage[]>([])
   const [frames, setFrames] = useState<FrameData[]>([])
   const [srcCols, setSrcCols] = useState(() => loadSetting(STORAGE_KEYS.srcCols, 8) as number)
   const [srcRows, setSrcRows] = useState(() => loadSetting(STORAGE_KEYS.srcRows, 4) as number)
@@ -86,32 +96,51 @@ function App() {
     localStorage.setItem(STORAGE_KEYS.fps, fps.toString())
   }, [fps])
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files || files.length === 0) return
 
-    // Check if it's a video file
-    if (file.type.startsWith('video/')) {
-      handleVideoUpload(file)
-    } else if (file.type === 'image/gif') {
-      // Handle GIF file
-      handleGifUpload(file)
-    } else {
-      // Handle image file as before
+    // Process all files
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+
+      // Check if it's a video file
+      if (file.type.startsWith('video/')) {
+        await handleVideoUpload(file)
+      } else if (file.type === 'image/gif') {
+        // Handle GIF file
+        await handleGifUpload(file)
+      } else {
+        // Handle image file
+        await handleImageUpload(file)
+      }
+    }
+
+    // Reset file input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  const handleImageUpload = (file: File): Promise<void> => {
+    return new Promise((resolve) => {
       const reader = new FileReader()
       reader.onload = (event) => {
         const imageUrl = event.target?.result as string
-        setOriginalImage(imageUrl)
 
-        // Create image to get dimensions
-        const img = new Image()
-        img.onload = () => {
-          generateFrames(img.width, img.height)
+        const newSource: SourceImage = {
+          id: `source-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          name: file.name,
+          imageUrl,
+          cols: srcCols,
+          rows: srcRows
         }
-        img.src = imageUrl
+
+        setSourceImages(prev => [...prev, newSource])
+        resolve()
       }
       reader.readAsDataURL(file)
-    }
+    })
   }
 
   const handleVideoUpload = async (file: File) => {
@@ -159,7 +188,7 @@ function App() {
     const processFrame = async (i: number) => {
       if (i >= samplesToTake) {
         // All frames processed, create sprite sheet
-        await createSpriteSheet(extractedFrames, video.videoWidth, video.videoHeight)
+        await createSpriteSheet(extractedFrames, video.videoWidth, video.videoHeight, file.name)
         URL.revokeObjectURL(videoUrl)
         setIsProcessingVideo(false)
         return
@@ -332,7 +361,7 @@ function App() {
       }
 
       // Create sprite sheet from extracted frames
-      await createSpriteSheet(extractedFrames, frameWidth, frameHeight)
+      await createSpriteSheet(extractedFrames, frameWidth, frameHeight, file.name)
       setIsProcessingVideo(false)
     } catch (error) {
       console.error('Failed to process GIF:', error)
@@ -340,10 +369,10 @@ function App() {
     }
   }
 
-  const createSpriteSheet = async (frames: string[], frameWidth: number, frameHeight: number) => {
-    const cols = Math.ceil(Math.sqrt(frames.length))
-    const rows = Math.ceil(frames.length / cols)
-    
+  const createSpriteSheet = async (extractedFrames: string[], frameWidth: number, frameHeight: number, fileName: string) => {
+    const cols = Math.ceil(Math.sqrt(extractedFrames.length))
+    const rows = Math.ceil(extractedFrames.length / cols)
+
     const spriteCanvas = document.createElement('canvas')
     spriteCanvas.width = frameWidth * cols
     spriteCanvas.height = frameHeight * rows
@@ -352,18 +381,18 @@ function App() {
       colorSpace: 'srgb'
     })
     if (!spriteCtx) return
-    
+
     // Disable smoothing
     spriteCtx.imageSmoothingEnabled = false
-    
+
     // Draw all frames to sprite sheet
-    for (let i = 0; i < frames.length; i++) {
+    for (let i = 0; i < extractedFrames.length; i++) {
       const img = new Image()
-      img.src = frames[i]
+      img.src = extractedFrames[i]
       await new Promise((resolve) => {
         img.onload = resolve
       })
-      
+
       const col = i % cols
       const row = Math.floor(i / cols)
       spriteCtx.drawImage(
@@ -374,41 +403,55 @@ function App() {
         frameHeight
       )
     }
-    
-    // Set the sprite sheet as the original image
-    setOriginalImage(exportCanvasAsPNG(spriteCanvas))
-    setSrcCols(cols)
-    setSrcRows(rows)
+
+    // Add as new source image
+    const newSource: SourceImage = {
+      id: `source-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
+      name: fileName,
+      imageUrl: exportCanvasAsPNG(spriteCanvas),
+      cols,
+      rows
+    }
+    setSourceImages(prev => [...prev, newSource])
 
     // Set target size to match original frame dimensions
     setTargetWidth(frameWidth)
     setTargetHeight(frameHeight)
-
-    // Generate frames for the sprite sheet
-    generateFrames(spriteCanvas.width, spriteCanvas.height)
   }
 
-  const generateFrames = useCallback((imageWidth: number, imageHeight: number) => {
-    const frameWidth = imageWidth / srcCols
-    const frameHeight = imageHeight / srcRows
+  // Generate frames from all source images
+  const generateAllFrames = useCallback(() => {
     const newFrames: FrameData[] = []
+    let globalIndex = 0
 
-    for (let row = 0; row < srcRows; row++) {
-      for (let col = 0; col < srcCols; col++) {
-        const index = row * srcCols + col
+    sourceImages.forEach((source, sourceIndex) => {
+      // Load image to get dimensions
+      const img = new Image()
+      img.src = source.imageUrl
+      // Note: This is sync because we need dimensions immediately
+      // In a real scenario, we'd precompute these
+
+      const frameCount = source.cols * source.rows
+      for (let localIndex = 0; localIndex < frameCount; localIndex++) {
+        const col = localIndex % source.cols
+        const row = Math.floor(localIndex / source.cols)
+
         newFrames.push({
-          index,
-          x: col * frameWidth,
-          y: row * frameHeight,
-          width: frameWidth,
-          height: frameHeight,
-          selected: false
+          index: globalIndex,
+          localIndex,
+          x: col, // Store col/row instead of pixel coords
+          y: row,
+          width: source.cols,
+          height: source.rows,
+          selected: false,
+          sourceIndex
         })
+        globalIndex++
       }
-    }
+    })
 
     setFrames(newFrames)
-  }, [srcCols, srcRows])
+  }, [sourceImages])
 
   const toggleFrame = (index: number) => {
     setFrames(prev => prev.map(frame => 
@@ -428,91 +471,113 @@ function App() {
 
 
   const processSprites = async () => {
-    if (!originalImage || frames.length === 0) return
+    if (sourceImages.length === 0 || frames.length === 0) return
 
     const selectedFrames = frames.filter(f => f.selected)
     if (selectedFrames.length === 0) return
 
-    const img = new Image()
-    img.onload = () => {
-      const outputCols = Math.min(selectedFrames.length, srcCols)
-      const outputRows = Math.ceil(selectedFrames.length / outputCols)
+    // Load all source images first
+    const loadedImages: { [key: number]: HTMLImageElement } = {}
+    await Promise.all(
+      sourceImages.map((source, idx) => {
+        return new Promise<void>((resolve) => {
+          const img = new Image()
+          img.onload = () => {
+            loadedImages[idx] = img
+            resolve()
+          }
+          img.src = source.imageUrl
+        })
+      })
+    )
 
-      const resultCanvas = document.createElement('canvas')
-      resultCanvas.width = outputCols * targetWidth
-      resultCanvas.height = outputRows * targetHeight
-      const ctx = resultCanvas.getContext('2d', {
+    // Calculate output layout
+    const outputCols = Math.ceil(Math.sqrt(selectedFrames.length))
+    const outputRows = Math.ceil(selectedFrames.length / outputCols)
+
+    const resultCanvas = document.createElement('canvas')
+    resultCanvas.width = outputCols * targetWidth
+    resultCanvas.height = outputRows * targetHeight
+    const ctx = resultCanvas.getContext('2d', {
+      alpha: true,
+      colorSpace: 'srgb',
+      willReadFrequently: true
+    })
+    if (!ctx) return
+
+    // Disable smoothing for pixel-perfect rendering
+    ctx.imageSmoothingEnabled = false
+    ctx.imageSmoothingQuality = 'low'
+
+    selectedFrames.forEach((frame, idx) => {
+      const destCol = idx % outputCols
+      const destRow = Math.floor(idx / outputCols)
+
+      const sourceImg = loadedImages[frame.sourceIndex]
+      const source = sourceImages[frame.sourceIndex]
+      if (!sourceImg || !source) return
+
+      // Calculate frame dimensions from source image
+      const frameWidth = sourceImg.width / source.cols
+      const frameHeight = sourceImg.height / source.rows
+      const srcX = frame.x * frameWidth
+      const srcY = frame.y * frameHeight
+
+      // Create temporary canvas for processing
+      const tempCanvas = document.createElement('canvas')
+      tempCanvas.width = frameWidth
+      tempCanvas.height = frameHeight
+      const tempCtx = tempCanvas.getContext('2d', {
         alpha: true,
         colorSpace: 'srgb',
         willReadFrequently: true
       })
-      if (!ctx) return
-      
-      // Disable smoothing for pixel-perfect rendering
-      ctx.imageSmoothingEnabled = false
-      ctx.imageSmoothingQuality = 'low'
+      if (!tempCtx) return
 
-      selectedFrames.forEach((frame, idx) => {
-        const destCol = idx % outputCols
-        const destRow = Math.floor(idx / outputCols)
+      // Disable smoothing
+      tempCtx.imageSmoothingEnabled = false
+      tempCtx.imageSmoothingQuality = 'low'
 
-        // Create temporary canvas for processing
-        const tempCanvas = document.createElement('canvas')
-        tempCanvas.width = frame.width
-        tempCanvas.height = frame.height
-        const tempCtx = tempCanvas.getContext('2d', {
-          alpha: true,
-          colorSpace: 'srgb',
-          willReadFrequently: true
-        })
-        if (!tempCtx) return
-        
-        // Disable smoothing
-        tempCtx.imageSmoothingEnabled = false
-        tempCtx.imageSmoothingQuality = 'low'
+      // Draw original frame
+      tempCtx.drawImage(
+        sourceImg,
+        srcX,
+        srcY,
+        frameWidth,
+        frameHeight,
+        0,
+        0,
+        frameWidth,
+        frameHeight
+      )
 
-        // Draw original frame
-        tempCtx.drawImage(
-          img,
-          frame.x,
-          frame.y,
-          frame.width,
-          frame.height,
-          0,
-          0,
-          frame.width,
-          frame.height
-        )
+      // Scale down to target size using nearest neighbor interpolation
+      const scaledCanvas = scaleImageNearestNeighbor(tempCanvas, targetWidth, targetHeight)
+      const scaledCtx = scaledCanvas.getContext('2d')
+      if (!scaledCtx) return
 
-        // Scale down to target size using nearest neighbor interpolation
-        const scaledCanvas = scaleImageNearestNeighbor(tempCanvas, targetWidth, targetHeight)
-        const scaledCtx = scaledCanvas.getContext('2d')
-        if (!scaledCtx) return
+      // Remove background if enabled
+      if (removeBackground) {
+        const imageData = scaledCtx.getImageData(0, 0, targetWidth, targetHeight)
+        const processedData = removeBackgroundFromImage(imageData, targetWidth, targetHeight, backgroundTolerance, edgeErosion, bgColorSource)
+        scaledCtx.putImageData(processedData, 0, 0)
+      }
 
-        // Remove background if enabled
-        if (removeBackground) {
-          const imageData = scaledCtx.getImageData(0, 0, targetWidth, targetHeight)
-          const processedData = removeBackgroundFromImage(imageData, targetWidth, targetHeight, backgroundTolerance, edgeErosion, bgColorSource)
-          scaledCtx.putImageData(processedData, 0, 0)
-        }
+      // Draw to result canvas
+      ctx.drawImage(
+        scaledCanvas,
+        0,
+        0,
+        targetWidth,
+        targetHeight,
+        destCol * targetWidth,
+        destRow * targetHeight,
+        targetWidth,
+        targetHeight
+      )
+    })
 
-        // Draw to result canvas
-        ctx.drawImage(
-          scaledCanvas,
-          0,
-          0,
-          targetWidth,
-          targetHeight,
-          destCol * targetWidth,
-          destRow * targetHeight,
-          targetWidth,
-          targetHeight
-        )
-      })
-
-      setProcessedImageUrl(exportCanvasAsPNG(resultCanvas))
-    }
-    img.src = originalImage
+    setProcessedImageUrl(exportCanvasAsPNG(resultCanvas))
   }
 
   const downloadResult = () => {
@@ -580,15 +645,22 @@ function App() {
     }
   }, [isPlaying, animate])
 
+  // Regenerate frames when sourceImages change or when source settings change
   useEffect(() => {
-    if (originalImage) {
-      const img = new Image()
-      img.onload = () => {
-        generateFrames(img.width, img.height)
-      }
-      img.src = originalImage
-    }
-  }, [srcCols, srcRows, originalImage, generateFrames])
+    generateAllFrames()
+  }, [generateAllFrames])
+
+  // Update source cols/rows when global settings change
+  const updateSourceSettings = useCallback((sourceId: string, cols: number, rows: number) => {
+    setSourceImages(prev => prev.map(source =>
+      source.id === sourceId ? { ...source, cols, rows } : source
+    ))
+  }, [])
+
+  // Remove a source image
+  const removeSource = useCallback((sourceId: string) => {
+    setSourceImages(prev => prev.filter(source => source.id !== sourceId))
+  }, [])
 
   useEffect(() => {
     if (animationCanvasRef.current) {
@@ -653,6 +725,7 @@ function App() {
         onChange={handleFileUpload}
         style={{ display: 'none' }}
         disabled={isProcessingVideo}
+        multiple
       />
 
       {isProcessingVideo && (
@@ -779,7 +852,7 @@ function App() {
             <button
               className="process-button"
               onClick={processSprites}
-              disabled={!originalImage}
+              disabled={sourceImages.length === 0}
             >
               変換実行
             </button>
@@ -801,7 +874,7 @@ function App() {
         </div>
       </div>
 
-      {originalImage && frames.length > 0 && (
+      {sourceImages.length > 0 && (
         <div className="main-content">
           <div className="frame-selection-section">
             <h3>フレーム選択</h3>
@@ -812,25 +885,62 @@ function App() {
                 {frames.filter(f => f.selected).length} / {frames.length} フレーム選択中
               </span>
             </div>
-            <div className="sprite-grid" style={{ '--frame-aspect-ratio': `${frames[0]?.width || 1} / ${frames[0]?.height || 1}` } as React.CSSProperties}>
-              {frames.map((frame) => (
-                <div
-                  key={frame.index}
-                  className={`sprite-frame ${frame.selected ? 'selected' : ''}`}
-                  onClick={() => toggleFrame(frame.index)}
-                >
-                  <div
-                    className="sprite-frame-content"
-                    style={{
-                      backgroundImage: `url(${originalImage})`,
-                      backgroundSize: `${srcCols * 100}% ${srcRows * 100}%`,
-                      backgroundPosition: `${-(frame.index % srcCols) * 100}% ${-Math.floor(frame.index / srcCols) * 100}%`,
-                    }}
-                  />
-                  <div className="frame-number">{frame.index + 1}</div>
+
+            {/* Source images list with their frames */}
+            {sourceImages.map((source, sourceIdx) => {
+              const sourceFrames = frames.filter(f => f.sourceIndex === sourceIdx)
+              return (
+                <div key={source.id} className="source-section">
+                  <div className="source-header">
+                    <span className="source-name">{source.name}</span>
+                    <div className="source-controls">
+                      <label>
+                        横:
+                        <NumberInput
+                          min={1}
+                          value={source.cols}
+                          onChange={(cols) => updateSourceSettings(source.id, cols, source.rows)}
+                        />
+                      </label>
+                      <label>
+                        縦:
+                        <NumberInput
+                          min={1}
+                          value={source.rows}
+                          onChange={(rows) => updateSourceSettings(source.id, source.cols, rows)}
+                        />
+                      </label>
+                      <button
+                        className="remove-source-button"
+                        onClick={() => removeSource(source.id)}
+                        title="この素材を削除"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                  <div className="sprite-grid" style={{ '--frame-aspect-ratio': `${source.cols} / ${source.rows}` } as React.CSSProperties}>
+                    {sourceFrames.map((frame) => (
+                      <div
+                        key={frame.index}
+                        className={`sprite-frame ${frame.selected ? 'selected' : ''}`}
+                        onClick={() => toggleFrame(frame.index)}
+                      >
+                        <div
+                          className="sprite-frame-content"
+                          style={{
+                            backgroundImage: `url(${source.imageUrl})`,
+                            backgroundSize: `${source.cols * 100}% ${source.rows * 100}%`,
+                            backgroundPosition: `${-frame.x * 100}% ${-frame.y * 100}%`,
+                          }}
+                        />
+                        <div className="frame-number">{frame.localIndex + 1}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              ))}
-            </div>
+              )
+            })}
           </div>
 
           {processedImageUrl && (
@@ -838,9 +948,9 @@ function App() {
               <div className="result-section">
                 <h3>変換結果</h3>
                 <div className="result-container">
-                  <img 
-                    src={processedImageUrl} 
-                    alt="Processed sprite sheet" 
+                  <img
+                    src={processedImageUrl}
+                    alt="Processed sprite sheet"
                     className="result-image"
                   />
                   <button className="download-button" onClick={downloadResult}>

@@ -587,3 +587,85 @@ h1 {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Source section styles */
+.source-section {
+  margin-bottom: 25px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  background-color: #fafafa;
+  overflow: hidden;
+}
+
+.source-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background-color: #f0f2f5;
+  border-bottom: 1px solid #e0e0e0;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.source-name {
+  font-weight: 600;
+  color: #333;
+  font-size: 14px;
+  flex: 1;
+  min-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.source-controls label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #555;
+  margin-bottom: 0;
+}
+
+.source-controls input[type="number"] {
+  width: 60px;
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 13px;
+  text-align: center;
+}
+
+.remove-source-button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 18px;
+  font-weight: bold;
+  color: #dc3545;
+  background-color: white;
+  border: 1px solid #dc3545;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.remove-source-button:hover {
+  background-color: #dc3545;
+  color: white;
+}
+
+.source-section .sprite-grid {
+  border-radius: 0;
+  margin: 0;
+}
