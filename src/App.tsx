@@ -23,6 +23,11 @@ interface SourceImage {
   rows: number
 }
 
+interface PendingImage {
+  file: File
+  imageUrl: string
+}
+
 // Local storage keys
 const STORAGE_KEYS = {
   srcCols: 'sprite-remixer-src-cols',
@@ -58,6 +63,12 @@ function App() {
   const [currentFrame, setCurrentFrame] = useState(0)
   const [isProcessingVideo, setIsProcessingVideo] = useState(false)
   const [videoProgress, setVideoProgress] = useState({ current: 0, total: 0 })
+
+  // ソース設定ダイアログ用のステート
+  const [showSourceDialog, setShowSourceDialog] = useState(false)
+  const [pendingImage, setPendingImage] = useState<PendingImage | null>(null)
+  const [dialogCols, setDialogCols] = useState(srcCols)
+  const [dialogRows, setDialogRows] = useState(srcRows)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const animationCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -128,19 +139,40 @@ function App() {
       reader.onload = (event) => {
         const imageUrl = event.target?.result as string
 
-        const newSource: SourceImage = {
-          id: `source-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          name: file.name,
-          imageUrl,
-          cols: srcCols,
-          rows: srcRows
-        }
-
-        setSourceImages(prev => [...prev, newSource])
+        // ダイアログを表示して設定を確認
+        setPendingImage({ file, imageUrl })
+        setDialogCols(srcCols)
+        setDialogRows(srcRows)
+        setShowSourceDialog(true)
         resolve()
       }
       reader.readAsDataURL(file)
     })
+  }
+
+  // ダイアログで確定した時の処理
+  const confirmSourceSettings = () => {
+    if (!pendingImage) return
+
+    const newSource: SourceImage = {
+      id: `source-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
+      name: pendingImage.file.name,
+      imageUrl: pendingImage.imageUrl,
+      cols: dialogCols,
+      rows: dialogRows
+    }
+
+    setSourceImages(prev => [...prev, newSource])
+    setSrcCols(dialogCols)
+    setSrcRows(dialogRows)
+    setShowSourceDialog(false)
+    setPendingImage(null)
+  }
+
+  // ダイアログをキャンセルした時の処理
+  const cancelSourceSettings = () => {
+    setShowSourceDialog(false)
+    setPendingImage(null)
   }
 
   const handleVideoUpload = async (file: File) => {
@@ -716,8 +748,34 @@ function App() {
 
   return (
     <div className="app">
-      <h1>スプライトシート ドット絵変換ツール</h1>
-      
+      {/* Header */}
+      <header className="header">
+        <div className="header-content">
+          <div className="logo">
+            <div className="logo-icon">🎮</div>
+            <h1>Sprite Remixer</h1>
+          </div>
+          <div className="header-actions">
+            <button className="btn" onClick={saveAllSettings}>
+              💾 設定を保存
+            </button>
+            <input
+              type="file"
+              accept=".json"
+              onChange={loadSettingsFromFile}
+              style={{ display: 'none' }}
+              id="settings-file-input"
+            />
+            <button className="btn" onClick={() => document.getElementById('settings-file-input')?.click()}>
+              📂 設定を読込
+            </button>
+            <button className="btn" onClick={resetToDefaults}>
+              ↺ リセット
+            </button>
+          </div>
+        </div>
+      </header>
+
       <input
         ref={fileInputRef}
         type="file"
@@ -731,158 +789,173 @@ function App() {
       {isProcessingVideo && (
         <div className="video-progress">
           <div className="progress-content">
-            <p>動画/GIFを処理中...</p>
+            <p>処理中...</p>
             <progress value={videoProgress.current} max={videoProgress.total} />
             <p>{videoProgress.current} / {videoProgress.total} フレーム</p>
           </div>
         </div>
       )}
 
+      {/* ソース設定ダイアログ */}
+      {showSourceDialog && pendingImage && (
+        <div className="source-dialog-overlay">
+          <div className="source-dialog">
+            <div className="source-dialog-header">
+              <h3>ソース設定</h3>
+            </div>
+            <div className="source-dialog-preview">
+              <img src={pendingImage.imageUrl} alt="プレビュー" />
+            </div>
+            <div className="source-dialog-body">
+              <p className="source-dialog-filename">{pendingImage.file.name}</p>
+              <label>
+                横のフレーム数
+                <NumberInput
+                  min={1}
+                  value={dialogCols}
+                  onChange={setDialogCols}
+                />
+              </label>
+              <label>
+                縦のフレーム数
+                <NumberInput
+                  min={1}
+                  value={dialogRows}
+                  onChange={setDialogRows}
+                />
+              </label>
+            </div>
+            <div className="source-dialog-actions">
+              <button className="btn" onClick={cancelSourceSettings}>
+                キャンセル
+              </button>
+              <button className="btn btn-primary" onClick={confirmSourceSettings}>
+                追加
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Top Controls Section */}
       <div className="top-section">
-        <div className="upload-section">
-          <button
-            className="upload-button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isProcessingVideo}
-          >
-            {isProcessingVideo ? '処理中...' : '画像/動画を選択'}
-          </button>
-        </div>
-
-        <div className="controls">
-          <div className="control-group">
-            <h3>元のスプライト設定</h3>
-          <label>
-            横のフレーム数:
-            <NumberInput
-              min={1}
-              value={srcCols}
-              onChange={setSrcCols}
-            />
-          </label>
-          <label>
-            縦のフレーム数:
-            <NumberInput
-              min={1}
-              value={srcRows}
-              onChange={setSrcRows}
-            />
-          </label>
-        </div>
-
-        <div className="control-group">
-          <h3>ターゲット設定</h3>
-          <label>
-            アスペクト比固定:
-            <input
-              type="checkbox"
-              checked={lockAspectRatio}
-              onChange={(e) => {
-                if (e.target.checked && targetWidth > 0) {
-                  lockedAspectRatioRef.current = targetHeight / targetWidth
-                }
-                setLockAspectRatio(e.target.checked)
-              }}
-            />
-          </label>
-          <label>
-            ターゲット幅 (px):
-            <NumberInput
-              min={8}
-              value={targetWidth}
-              onChange={setTargetWidth}
-            />
-          </label>
-          <label>
-            ターゲット高さ (px):
-            <NumberInput
-              key={lockAspectRatio ? `locked-${targetHeight}` : 'unlocked'}
-              min={8}
-              value={targetHeight}
-              onChange={setTargetHeight}
-              disabled={lockAspectRatio}
-            />
-          </label>
-          <label>
-            背景を透過:
-            <input
-              type="checkbox"
-              checked={removeBackground}
-              onChange={(e) => setRemoveBackground(e.target.checked)}
-            />
-          </label>
-          {removeBackground && (
-            <>
-              <label>
-                背景色の取得元:
-                <select
-                  value={bgColorSource}
-                  onChange={(e) => setBgColorSource(e.target.value as BackgroundColorSource)}
-                >
-                  <option value="auto">自動検出</option>
-                  <option value="top-left">左上</option>
-                  <option value="top-right">右上</option>
-                  <option value="bottom-left">左下</option>
-                  <option value="bottom-right">右下</option>
-                </select>
-              </label>
-              <label>
-                透過の許容値:
-                <NumberInput
-                  min={0}
-                  max={255}
-                  value={backgroundTolerance}
-                  onChange={setBackgroundTolerance}
-                />
-              </label>
-              <label>
-                境界侵食 (px):
-                <NumberInput
-                  min={0}
-                  max={10}
-                  value={edgeErosion}
-                  onChange={setEdgeErosion}
-                />
-              </label>
-            </>
-          )}
+        <div className="top-section-content">
+          <div className="upload-section">
+            <button
+              className="upload-button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isProcessingVideo}
+            >
+              {isProcessingVideo ? '⏳ 処理中...' : '📁 ファイルを追加'}
+            </button>
           </div>
 
-          <div className="control-group">
-            <button
-              className="process-button"
-              onClick={processSprites}
-              disabled={sourceImages.length === 0}
-            >
-              変換実行
-            </button>
-            <div className="settings-controls">
-              <button onClick={saveAllSettings}>設定を保存</button>
-              <input
-                type="file"
-                accept=".json"
-                onChange={loadSettingsFromFile}
-                style={{ display: 'none' }}
-                id="settings-file-input"
-              />
-              <button onClick={() => document.getElementById('settings-file-input')?.click()}>
-                設定を読込
+          <div className="controls">
+            <div className="control-group">
+              <h3>出力設定</h3>
+              <label>
+                アスペクト比固定
+                <input
+                  type="checkbox"
+                  checked={lockAspectRatio}
+                  onChange={(e) => {
+                    if (e.target.checked && targetWidth > 0) {
+                      lockedAspectRatioRef.current = targetHeight / targetWidth
+                    }
+                    setLockAspectRatio(e.target.checked)
+                  }}
+                />
+              </label>
+              <label>
+                出力幅 (px)
+                <NumberInput
+                  min={8}
+                  value={targetWidth}
+                  onChange={setTargetWidth}
+                />
+              </label>
+              <label>
+                出力高さ (px)
+                <NumberInput
+                  key={lockAspectRatio ? `locked-${targetHeight}` : 'unlocked'}
+                  min={8}
+                  value={targetHeight}
+                  onChange={setTargetHeight}
+                  disabled={lockAspectRatio}
+                />
+              </label>
+            </div>
+
+            <div className="control-group">
+              <h3>背景除去</h3>
+              <label>
+                背景を透過
+                <input
+                  type="checkbox"
+                  checked={removeBackground}
+                  onChange={(e) => setRemoveBackground(e.target.checked)}
+                />
+              </label>
+              {removeBackground && (
+                <>
+                  <label>
+                    検出位置
+                    <select
+                      value={bgColorSource}
+                      onChange={(e) => setBgColorSource(e.target.value as BackgroundColorSource)}
+                    >
+                      <option value="auto">自動</option>
+                      <option value="top-left">左上</option>
+                      <option value="top-right">右上</option>
+                      <option value="bottom-left">左下</option>
+                      <option value="bottom-right">右下</option>
+                    </select>
+                  </label>
+                  <label>
+                    許容値
+                    <NumberInput
+                      min={0}
+                      max={255}
+                      value={backgroundTolerance}
+                      onChange={setBackgroundTolerance}
+                    />
+                  </label>
+                  <label>
+                    侵食 (px)
+                    <NumberInput
+                      min={0}
+                      max={10}
+                      value={edgeErosion}
+                      onChange={setEdgeErosion}
+                    />
+                  </label>
+                </>
+              )}
+              <button
+                className="process-button"
+                onClick={processSprites}
+                disabled={sourceImages.length === 0}
+              >
+                ✨ 変換実行
               </button>
-              <button onClick={resetToDefaults}>初期値に戻す</button>
             </div>
           </div>
         </div>
       </div>
 
-      {sourceImages.length > 0 && (
+      {/* Main Content */}
+      {sourceImages.length > 0 ? (
         <div className="main-content">
-          <div className="frame-selection-section">
-            <h3>フレーム選択</h3>
+          {/* Frame Selection Card */}
+          <div className="card frame-selection-section">
+            <div className="card-header">
+              <h3>🎞️ フレーム選択</h3>
+            </div>
             <div className="frame-controls">
               <button onClick={selectAll}>全選択</button>
               <button onClick={deselectAll}>全解除</button>
               <span className="selected-count">
-                {frames.filter(f => f.selected).length} / {frames.length} フレーム選択中
+                {frames.filter(f => f.selected).length} / {frames.length} 選択中
               </span>
             </div>
 
@@ -895,7 +968,7 @@ function App() {
                     <span className="source-name">{source.name}</span>
                     <div className="source-controls">
                       <label>
-                        横:
+                        横
                         <NumberInput
                           min={1}
                           value={source.cols}
@@ -903,7 +976,7 @@ function App() {
                         />
                       </label>
                       <label>
-                        縦:
+                        縦
                         <NumberInput
                           min={1}
                           value={source.rows}
@@ -943,10 +1016,11 @@ function App() {
             })}
           </div>
 
+          {/* Results Panel */}
           {processedImageUrl && (
             <div className="results-panel">
               <div className="result-section">
-                <h3>変換結果</h3>
+                <h3>📦 変換結果</h3>
                 <div className="result-container">
                   <img
                     src={processedImageUrl}
@@ -954,21 +1028,23 @@ function App() {
                     className="result-image"
                   />
                   <button className="download-button" onClick={downloadResult}>
-                    ダウンロード
+                    ⬇️ ダウンロード
                   </button>
                 </div>
               </div>
 
               <div className="animation-preview">
-                <h3>アニメーションプレビュー</h3>
+                <h3>▶️ プレビュー</h3>
                 <div className="animation-controls">
-                  <canvas ref={animationCanvasRef} className="animation-canvas" />
+                  <div className="animation-canvas-wrapper">
+                    <canvas ref={animationCanvasRef} className="animation-canvas" />
+                  </div>
                   <div className="animation-buttons">
                     <button onClick={() => setIsPlaying(!isPlaying)}>
-                      {isPlaying ? '⏸ 一時停止' : '▶ 再生'}
+                      {isPlaying ? '⏸ 停止' : '▶ 再生'}
                     </button>
                     <label>
-                      FPS:
+                      FPS
                       <NumberInput
                         min={1}
                         max={60}
@@ -981,6 +1057,16 @@ function App() {
               </div>
             </div>
           )}
+        </div>
+      ) : (
+        <div className="main-content">
+          <div className="card">
+            <div className="empty-state">
+              <div className="empty-state-icon">🖼️</div>
+              <h2>ファイルをアップロード</h2>
+              <p>スプライトシート画像、動画、またはGIFファイルをドラッグ＆ドロップするか、上のボタンからファイルを選択してください。</p>
+            </div>
+          </div>
         </div>
       )}
     </div>
