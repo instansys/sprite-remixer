@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 
-import type { PendingImage, FrameSamplingQuality, VideoProgress, SourceImage } from './types'
+import type { PendingImage, FrameSamplingQuality, OutputFormat, VideoProgress, SourceImage } from './types'
 import type { BackgroundColorSource } from './imageProcessing'
 import { STORAGE_KEYS, DEFAULT_SETTINGS } from './constants'
 import { useLocalStorage, useLocalStorageString, useFrameSelection, useAnimation, useSourceImages } from './hooks'
@@ -34,6 +34,10 @@ function App() {
   const [targetWidth, setTargetWidth] = useLocalStorage(STORAGE_KEYS.targetWidth, DEFAULT_SETTINGS.targetWidth)
   const [targetHeight, setTargetHeight] = useLocalStorage(STORAGE_KEYS.targetHeight, DEFAULT_SETTINGS.targetHeight)
   const [outputCols, setOutputCols] = useLocalStorage(STORAGE_KEYS.outputCols, DEFAULT_SETTINGS.outputCols)
+  const [outputFormat, setOutputFormat] = useLocalStorageString<OutputFormat>(
+    STORAGE_KEYS.outputFormat,
+    DEFAULT_SETTINGS.outputFormat
+  )
   const [fps, setFps] = useLocalStorage(STORAGE_KEYS.fps, DEFAULT_SETTINGS.fps)
   const [frameSamplingQuality, setFrameSamplingQuality] = useLocalStorageString<FrameSamplingQuality>(
     STORAGE_KEYS.frameSamplingQuality,
@@ -245,6 +249,7 @@ function App() {
       targetWidth,
       targetHeight,
       outputCols,
+      outputFormat,
       removeBackground,
       backgroundTolerance,
       edgeErosion,
@@ -300,7 +305,8 @@ function App() {
 
   const handleDownload = () => {
     if (processedImageUrl) {
-      downloadImage(processedImageUrl)
+      const ext = outputFormat === 'webp' ? 'webp' : 'png'
+      downloadImage(processedImageUrl, `sprite-sheet-pixel-art.${ext}`)
     }
   }
 
@@ -362,11 +368,13 @@ function App() {
               targetHeight={targetHeight}
               lockAspectRatio={lockAspectRatio}
               outputCols={outputCols}
+              outputFormat={outputFormat}
               selectedFrameCount={selectedCount}
               onWidthChange={setTargetWidth}
               onHeightChange={setTargetHeight}
               onLockAspectRatioChange={handleLockAspectRatioChange}
               onOutputColsChange={setOutputCols}
+              onOutputFormatChange={setOutputFormat}
             />
 
             <BackgroundRemovalSettings

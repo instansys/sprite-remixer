@@ -1,6 +1,6 @@
-import type { FrameData, SourceImage } from '../types'
+import type { FrameData, OutputFormat, SourceImage } from '../types'
 import type { BackgroundColorSource } from '../imageProcessing'
-import { scaleImageNearestNeighbor, removeBackgroundFromImage, exportCanvasAsPNG } from '../imageProcessing'
+import { scaleImageNearestNeighbor, removeBackgroundFromImage, exportCanvas } from '../imageProcessing'
 
 interface ProcessSpritesOptions {
   sourceImages: SourceImage[]
@@ -8,6 +8,7 @@ interface ProcessSpritesOptions {
   targetWidth: number
   targetHeight: number
   outputCols: number
+  outputFormat: OutputFormat
   removeBackground: boolean
   backgroundTolerance: number
   edgeErosion: number
@@ -21,6 +22,7 @@ export async function processSprites(options: ProcessSpritesOptions): Promise<st
     targetWidth,
     targetHeight,
     outputCols: outputColsSetting,
+    outputFormat,
     removeBackground,
     backgroundTolerance,
     edgeErosion,
@@ -131,7 +133,7 @@ export async function processSprites(options: ProcessSpritesOptions): Promise<st
     )
   })
 
-  return exportCanvasAsPNG(resultCanvas)
+  return exportCanvas(resultCanvas, outputFormat)
 }
 
 export function downloadImage(imageUrl: string, filename: string = 'sprite-sheet-pixel-art.png') {

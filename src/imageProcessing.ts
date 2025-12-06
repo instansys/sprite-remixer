@@ -1,3 +1,5 @@
+import type { OutputFormat } from './types'
+
 export interface ImageProcessingOptions {
   removeBackground?: boolean
   backgroundTolerance?: number
@@ -332,5 +334,14 @@ export function scaleImageNearestNeighbor(
 export function exportCanvasAsPNG(canvas: HTMLCanvasElement): string {
   // Export as PNG with maximum quality
   // PNG is lossless, so quality parameter doesn't affect it
+  return canvas.toDataURL('image/png')
+}
+
+export function exportCanvas(canvas: HTMLCanvasElement, format: OutputFormat): string {
+  if (format === 'webp') {
+    // WebP with maximum quality (1.0)
+    return canvas.toDataURL('image/webp', 1.0)
+  }
+  // PNG is lossless
   return canvas.toDataURL('image/png')
 }

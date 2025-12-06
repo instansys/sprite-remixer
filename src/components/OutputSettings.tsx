@@ -1,3 +1,4 @@
+import type { OutputFormat } from '../types'
 import { NumberInput } from '../NumberInput'
 
 interface OutputSettingsProps {
@@ -5,11 +6,13 @@ interface OutputSettingsProps {
   targetHeight: number
   lockAspectRatio: boolean
   outputCols: number
+  outputFormat: OutputFormat
   selectedFrameCount: number
   onWidthChange: (width: number) => void
   onHeightChange: (height: number) => void
   onLockAspectRatioChange: (locked: boolean, currentRatio: number) => void
   onOutputColsChange: (cols: number) => void
+  onOutputFormatChange: (format: OutputFormat) => void
 }
 
 export function OutputSettings({
@@ -17,11 +20,13 @@ export function OutputSettings({
   targetHeight,
   lockAspectRatio,
   outputCols,
+  outputFormat,
   selectedFrameCount,
   onWidthChange,
   onHeightChange,
   onLockAspectRatioChange,
-  onOutputColsChange
+  onOutputColsChange,
+  onOutputFormatChange
 }: OutputSettingsProps) {
   // Calculate actual cols/rows for the sprite sheet
   const actualCols = outputCols > 0 ? outputCols : Math.ceil(Math.sqrt(selectedFrameCount))
@@ -69,6 +74,25 @@ export function OutputSettings({
           onChange={onOutputColsChange}
         />
         <span className="hint">0 = 自動</span>
+      </label>
+      <label>
+        出力形式
+        <div className="format-selector">
+          <button
+            type="button"
+            className={`format-option ${outputFormat === 'png' ? 'selected' : ''}`}
+            onClick={() => onOutputFormatChange('png')}
+          >
+            PNG
+          </button>
+          <button
+            type="button"
+            className={`format-option ${outputFormat === 'webp' ? 'selected' : ''}`}
+            onClick={() => onOutputFormatChange('webp')}
+          >
+            WebP
+          </button>
+        </div>
       </label>
       {selectedFrameCount > 0 && (
         <div className="sheet-size-info">

@@ -27,6 +27,8 @@ export interface PendingImage {
 
 export type FrameSamplingQuality = 'low' | 'medium' | 'high' | 'ultra'
 
+export type OutputFormat = 'png' | 'webp'
+
 export interface SamplingConfig {
   label: string
   sampleInterval: number

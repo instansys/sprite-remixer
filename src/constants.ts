@@ -1,4 +1,4 @@
-import type { FrameSamplingQuality, SamplingConfig } from './types'
+import type { FrameSamplingQuality, OutputFormat, SamplingConfig } from './types'
 
 export const SAMPLING_CONFIGS: Record<FrameSamplingQuality, SamplingConfig> = {
   low: { label: '低 (軽い)', sampleInterval: 15, maxFrames: 30 },
@@ -13,6 +13,7 @@ export const STORAGE_KEYS = {
   targetWidth: 'sprite-remixer-target-width',
   targetHeight: 'sprite-remixer-target-height',
   outputCols: 'sprite-remixer-output-cols',
+  outputFormat: 'sprite-remixer-output-format',
   fps: 'sprite-remixer-fps',
   frameSamplingQuality: 'sprite-remixer-frame-sampling-quality'
 } as const
@@ -23,6 +24,7 @@ export const DEFAULT_SETTINGS = {
   targetWidth: 32,
   targetHeight: 32,
   outputCols: 0, // 0 = auto
+  outputFormat: 'webp' as OutputFormat,
   fps: 12,
   frameSamplingQuality: 'medium' as FrameSamplingQuality
 } as const
