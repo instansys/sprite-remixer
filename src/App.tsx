@@ -1,8 +1,8 @@
+import { decompressFrames, parseGIF } from 'gifuct-js'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
-import { removeBackgroundFromImage, scaleImageNearestNeighbor, exportCanvasAsPNG } from './imageProcessing'
+import { type BackgroundColorSource, exportCanvasAsPNG, removeBackgroundFromImage, scaleImageNearestNeighbor } from './imageProcessing'
 import { NumberInput } from './NumberInput'
-import { parseGIF, decompressFrames } from 'gifuct-js'
 
 interface FrameData {
   index: number
@@ -36,8 +36,12 @@ function App() {
   const [srcRows, setSrcRows] = useState(() => loadSetting(STORAGE_KEYS.srcRows, 4) as number)
   const [targetWidth, setTargetWidth] = useState(() => loadSetting(STORAGE_KEYS.targetWidth, 32) as number)
   const [targetHeight, setTargetHeight] = useState(() => loadSetting(STORAGE_KEYS.targetHeight, 32) as number)
+  const [lockAspectRatio, setLockAspectRatio] = useState(false)
+  const lockedAspectRatioRef = useRef(1) // height / width at the time of locking
   const [removeBackground, setRemoveBackground] = useState(false)
   const [backgroundTolerance, setBackgroundTolerance] = useState(10)
+  const [edgeErosion, setEdgeErosion] = useState(0)
+  const [bgColorSource, setBgColorSource] = useState<BackgroundColorSource>('auto')
   const [processedImageUrl, setProcessedImageUrl] = useState<string | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [fps, setFps] = useState(() => loadSetting(STORAGE_KEYS.fps, 12) as number)
@@ -66,6 +70,16 @@ function App() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.targetHeight, targetHeight.toString())
   }, [targetHeight])
+
+  // Maintain aspect ratio when targetWidth changes and lockAspectRatio is enabled
+  const prevTargetWidthRef = useRef(targetWidth)
+  useEffect(() => {
+    if (lockAspectRatio && prevTargetWidthRef.current !== targetWidth) {
+      const newHeight = Math.max(8, Math.round(targetWidth * lockedAspectRatioRef.current))
+      setTargetHeight(newHeight)
+    }
+    prevTargetWidthRef.current = targetWidth
+  }, [targetWidth, lockAspectRatio])
 
 
   useEffect(() => {
@@ -365,7 +379,11 @@ function App() {
     setOriginalImage(exportCanvasAsPNG(spriteCanvas))
     setSrcCols(cols)
     setSrcRows(rows)
-    
+
+    // Set target size to match original frame dimensions
+    setTargetWidth(frameWidth)
+    setTargetHeight(frameHeight)
+
     // Generate frames for the sprite sheet
     generateFrames(spriteCanvas.width, spriteCanvas.height)
   }
@@ -474,7 +492,7 @@ function App() {
         // Remove background if enabled
         if (removeBackground) {
           const imageData = scaledCtx.getImageData(0, 0, targetWidth, targetHeight)
-          const processedData = removeBackgroundFromImage(imageData, targetWidth, targetHeight, backgroundTolerance)
+          const processedData = removeBackgroundFromImage(imageData, targetWidth, targetHeight, backgroundTolerance, edgeErosion, bgColorSource)
           scaledCtx.putImageData(processedData, 0, 0)
         }
 
@@ -682,6 +700,19 @@ function App() {
         <div className="control-group">
           <h3>ターゲット設定</h3>
           <label>
+            アスペクト比固定:
+            <input
+              type="checkbox"
+              checked={lockAspectRatio}
+              onChange={(e) => {
+                if (e.target.checked && targetWidth > 0) {
+                  lockedAspectRatioRef.current = targetHeight / targetWidth
+                }
+                setLockAspectRatio(e.target.checked)
+              }}
+            />
+          </label>
+          <label>
             ターゲット幅 (px):
             <NumberInput
               min={8}
@@ -692,9 +723,11 @@ function App() {
           <label>
             ターゲット高さ (px):
             <NumberInput
+              key={lockAspectRatio ? `locked-${targetHeight}` : 'unlocked'}
               min={8}
               value={targetHeight}
               onChange={setTargetHeight}
+              disabled={lockAspectRatio}
             />
           </label>
           <label>
@@ -706,15 +739,39 @@ function App() {
             />
           </label>
           {removeBackground && (
-            <label>
-              透過の許容値:
-              <NumberInput
-                min={0}
-                max={50}
-                value={backgroundTolerance}
-                onChange={setBackgroundTolerance}
-              />
-            </label>
+            <>
+              <label>
+                背景色の取得元:
+                <select
+                  value={bgColorSource}
+                  onChange={(e) => setBgColorSource(e.target.value as BackgroundColorSource)}
+                >
+                  <option value="auto">自動検出</option>
+                  <option value="top-left">左上</option>
+                  <option value="top-right">右上</option>
+                  <option value="bottom-left">左下</option>
+                  <option value="bottom-right">右下</option>
+                </select>
+              </label>
+              <label>
+                透過の許容値:
+                <NumberInput
+                  min={0}
+                  max={255}
+                  value={backgroundTolerance}
+                  onChange={setBackgroundTolerance}
+                />
+              </label>
+              <label>
+                境界侵食 (px):
+                <NumberInput
+                  min={0}
+                  max={10}
+                  value={edgeErosion}
+                  onChange={setEdgeErosion}
+                />
+              </label>
+            </>
           )}
           </div>
 
@@ -755,7 +812,7 @@ function App() {
                 {frames.filter(f => f.selected).length} / {frames.length} フレーム選択中
               </span>
             </div>
-            <div className="sprite-grid">
+            <div className="sprite-grid" style={{ '--frame-aspect-ratio': `${frames[0]?.width || 1} / ${frames[0]?.height || 1}` } as React.CSSProperties}>
               {frames.map((frame) => (
                 <div
                   key={frame.index}
@@ -763,16 +820,11 @@ function App() {
                   onClick={() => toggleFrame(frame.index)}
                 >
                   <div
+                    className="sprite-frame-content"
                     style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
                       backgroundImage: `url(${originalImage})`,
                       backgroundSize: `${srcCols * 100}% ${srcRows * 100}%`,
                       backgroundPosition: `${-(frame.index % srcCols) * 100}% ${-Math.floor(frame.index / srcCols) * 100}%`,
-                      imageRendering: 'pixelated'
                     }}
                   />
                   <div className="frame-number">{frame.index + 1}</div>

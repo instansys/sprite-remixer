@@ -7,15 +7,17 @@ interface NumberInputProps {
   max?: number
   placeholder?: string
   className?: string
+  disabled?: boolean
 }
 
-export function NumberInput({ 
-  value, 
-  onChange, 
-  min, 
-  max, 
+export function NumberInput({
+  value,
+  onChange,
+  min,
+  max,
   placeholder,
-  className 
+  className,
+  disabled
 }: NumberInputProps) {
   const [inputValue, setInputValue] = useState(value.toString())
 
@@ -67,6 +69,7 @@ export function NumberInput({
       onKeyDown={handleKeyDown}
       placeholder={placeholder}
       className={className}
+      disabled={disabled}
     />
   )
 }
