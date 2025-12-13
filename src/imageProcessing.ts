@@ -311,12 +311,12 @@ export function scaleImageNearestNeighbor(
   scaledCanvas.width = targetWidth
   scaledCanvas.height = targetHeight
   // Preserve color space and alpha channel
-  const scaledCtx = scaledCanvas.getContext('2d', { 
+  const scaledCtx = scaledCanvas.getContext('2d', {
     alpha: true,
     colorSpace: 'srgb',
     willReadFrequently: true
   })
-  
+
   if (!scaledCtx) {
     throw new Error('Failed to get canvas context')
   }
@@ -324,10 +324,42 @@ export function scaleImageNearestNeighbor(
   // Ensure nearest neighbor scaling - disable all smoothing
   scaledCtx.imageSmoothingEnabled = false
   scaledCtx.imageSmoothingQuality = 'low'
-  
-  // Draw with nearest neighbor interpolation
-  scaledCtx.drawImage(sourceCanvas, 0, 0, targetWidth, targetHeight)
-  
+
+  // Calculate aspect ratio preserving scale
+  const sourceWidth = sourceCanvas.width
+  const sourceHeight = sourceCanvas.height
+  const sourceAspect = sourceWidth / sourceHeight
+  const targetAspect = targetWidth / targetHeight
+
+  let drawWidth: number
+  let drawHeight: number
+  let offsetX: number
+  let offsetY: number
+
+  if (sourceAspect > targetAspect) {
+    // Source is wider - fit to width
+    drawWidth = targetWidth
+    drawHeight = Math.round(targetWidth / sourceAspect)
+    offsetX = 0
+    offsetY = Math.floor((targetHeight - drawHeight) / 2)
+  } else if (sourceAspect < targetAspect) {
+    // Source is taller - fit to height
+    drawHeight = targetHeight
+    drawWidth = Math.round(targetHeight * sourceAspect)
+    offsetX = Math.floor((targetWidth - drawWidth) / 2)
+    offsetY = 0
+  } else {
+    // Same aspect ratio - fill exactly
+    drawWidth = targetWidth
+    drawHeight = targetHeight
+    offsetX = 0
+    offsetY = 0
+  }
+
+  // Canvas is already transparent by default
+  // Draw with nearest neighbor interpolation at the calculated position
+  scaledCtx.drawImage(sourceCanvas, offsetX, offsetY, drawWidth, drawHeight)
+
   return scaledCanvas
 }
 
