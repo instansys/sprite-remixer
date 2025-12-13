@@ -87,6 +87,38 @@ export function useAnimation({
     }
   }, [targetWidth, targetHeight])
 
+  // Draw the first frame when processedImageUrl changes or settings change
+  useEffect(() => {
+    if (!processedImageUrl || !canvasRef.current || selectedFrames.length === 0) return
+
+    const canvas = canvasRef.current
+    canvas.width = targetWidth
+    canvas.height = targetHeight
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    const img = new Image()
+    img.onload = () => {
+      // Draw first frame (position 0, 0 in the sprite sheet)
+      ctx.clearRect(0, 0, targetWidth, targetHeight)
+      ctx.drawImage(
+        img,
+        0,
+        0,
+        targetWidth,
+        targetHeight,
+        0,
+        0,
+        targetWidth,
+        targetHeight
+      )
+    }
+    img.src = processedImageUrl
+
+    // Reset frame counter
+    setCurrentFrame(0)
+  }, [processedImageUrl, targetWidth, targetHeight, selectedFrames.length, outputColsSetting])
+
   const togglePlayback = useCallback(() => {
     setIsPlaying(prev => !prev)
   }, [])
