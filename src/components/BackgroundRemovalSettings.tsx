@@ -6,11 +6,13 @@ interface BackgroundRemovalSettingsProps {
   backgroundTolerance: number
   edgeErosion: number
   bgColorSource: BackgroundColorSource
+  fillInterior: boolean
   hasSourceImages: boolean
   onRemoveBackgroundChange: (enabled: boolean) => void
   onToleranceChange: (tolerance: number) => void
   onEdgeErosionChange: (erosion: number) => void
   onBgColorSourceChange: (source: BackgroundColorSource) => void
+  onFillInteriorChange: (enabled: boolean) => void
   onProcess: () => void
 }
 
@@ -19,11 +21,13 @@ export function BackgroundRemovalSettings({
   backgroundTolerance,
   edgeErosion,
   bgColorSource,
+  fillInterior,
   hasSourceImages,
   onRemoveBackgroundChange,
   onToleranceChange,
   onEdgeErosionChange,
   onBgColorSourceChange,
+  onFillInteriorChange,
   onProcess
 }: BackgroundRemovalSettingsProps) {
   return (
@@ -68,6 +72,14 @@ export function BackgroundRemovalSettings({
               max={10}
               value={edgeErosion}
               onChange={onEdgeErosionChange}
+            />
+          </label>
+          <label>
+            内部も透過
+            <input
+              type="checkbox"
+              checked={fillInterior}
+              onChange={(e) => onFillInteriorChange(e.target.checked)}
             />
           </label>
         </>

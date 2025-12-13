@@ -53,6 +53,7 @@ function App() {
   const [backgroundTolerance, setBackgroundTolerance] = useState(10)
   const [edgeErosion, setEdgeErosion] = useState(0)
   const [bgColorSource, setBgColorSource] = useState<BackgroundColorSource>('auto')
+  const [fillInterior, setFillInterior] = useState(false)
 
   // Processing state
   const [processedImageUrl, setProcessedImageUrl] = useState<string | null>(null)
@@ -253,7 +254,8 @@ function App() {
       removeBackground,
       backgroundTolerance,
       edgeErosion,
-      bgColorSource
+      bgColorSource,
+      fillInterior
     })
     setProcessedImageUrl(result)
   }
@@ -382,11 +384,13 @@ function App() {
               backgroundTolerance={backgroundTolerance}
               edgeErosion={edgeErosion}
               bgColorSource={bgColorSource}
+              fillInterior={fillInterior}
               hasSourceImages={sourceImages.length > 0}
               onRemoveBackgroundChange={setRemoveBackground}
               onToleranceChange={setBackgroundTolerance}
               onEdgeErosionChange={setEdgeErosion}
               onBgColorSourceChange={setBgColorSource}
+              onFillInteriorChange={setFillInterior}
               onProcess={handleProcessSprites}
             />
           </div>

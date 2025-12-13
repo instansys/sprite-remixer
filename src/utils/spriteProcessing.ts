@@ -13,6 +13,7 @@ interface ProcessSpritesOptions {
   backgroundTolerance: number
   edgeErosion: number
   bgColorSource: BackgroundColorSource
+  fillInterior: boolean
 }
 
 export async function processSprites(options: ProcessSpritesOptions): Promise<string | null> {
@@ -26,7 +27,8 @@ export async function processSprites(options: ProcessSpritesOptions): Promise<st
     removeBackground,
     backgroundTolerance,
     edgeErosion,
-    bgColorSource
+    bgColorSource,
+    fillInterior
   } = options
 
   if (sourceImages.length === 0 || selectedFrames.length === 0) {
@@ -115,7 +117,8 @@ export async function processSprites(options: ProcessSpritesOptions): Promise<st
         targetHeight,
         backgroundTolerance,
         edgeErosion,
-        bgColorSource
+        bgColorSource,
+        fillInterior
       )
       scaledCtx.putImageData(processedData, 0, 0)
     }

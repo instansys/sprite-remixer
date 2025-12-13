@@ -213,11 +213,11 @@ export function removeBackgroundFromImage(
   height: number,
   tolerance: number = 10,
   erosion: number = 0,
-  colorSource: BackgroundColorSource = 'auto'
+  colorSource: BackgroundColorSource = 'auto',
+  fillInterior: boolean = false
 ): ImageData {
   const bgColor = detectBackgroundColor(imageData, width, height, colorSource)
   const result = new ImageData(width, height)
-  const visited = new Set<number>()
 
   // 知覚的色差（ΔE）を使った色類似度チェック
   // tolerance を ΔE スケールにマッピング（0-255 → 0-100）
@@ -232,64 +232,84 @@ export function removeBackgroundFromImage(
     const colorDiff = deltaE(r, g, b, bgColor[0], bgColor[1], bgColor[2])
     return colorDiff <= deltaEThreshold
   }
-  
-  // Flood fill from edges
-  const floodFill = (startX: number, startY: number) => {
-    const queue: [number, number][] = [[startX, startY]]
-    
-    while (queue.length > 0) {
-      const [x, y] = queue.shift()!
-      const idx = (y * width + x) * 4
-      const pixelKey = y * width + x
-      
-      if (x < 0 || x >= width || y < 0 || y >= height || visited.has(pixelKey)) {
-        continue
-      }
-      
-      visited.add(pixelKey)
-      
-      if (isColorSimilar(idx)) {
-        // Mark as transparent
+
+  if (fillInterior) {
+    // 内部も透過: 全ピクセルをスキャンして色が近いものを透過
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = (y * width + x) * 4
         result.data[idx] = imageData.data[idx]
         result.data[idx + 1] = imageData.data[idx + 1]
         result.data[idx + 2] = imageData.data[idx + 2]
-        result.data[idx + 3] = 0 // Set alpha to 0
-        
-        // Add neighbors
-        queue.push([x + 1, y])
-        queue.push([x - 1, y])
-        queue.push([x, y + 1])
-        queue.push([x, y - 1])
-      } else {
-        // Keep original pixel
-        result.data[idx] = imageData.data[idx]
-        result.data[idx + 1] = imageData.data[idx + 1]
-        result.data[idx + 2] = imageData.data[idx + 2]
-        result.data[idx + 3] = imageData.data[idx + 3]
+
+        if (isColorSimilar(idx)) {
+          result.data[idx + 3] = 0 // 透過
+        } else {
+          result.data[idx + 3] = imageData.data[idx + 3]
+        }
       }
     }
-  }
-  
-  // Start flood fill from all edges
-  for (let x = 0; x < width; x++) {
-    floodFill(x, 0) // Top edge
-    floodFill(x, height - 1) // Bottom edge
-  }
-  for (let y = 0; y < height; y++) {
-    floodFill(0, y) // Left edge
-    floodFill(width - 1, y) // Right edge
-  }
-  
-  // Copy remaining pixels
-  for (let y = 0; y < height; y++) {
+  } else {
+    // フラッドフィル方式: 端からのみ透過
+    const visited = new Set<number>()
+
+    const floodFill = (startX: number, startY: number) => {
+      const queue: [number, number][] = [[startX, startY]]
+
+      while (queue.length > 0) {
+        const [x, y] = queue.shift()!
+        const idx = (y * width + x) * 4
+        const pixelKey = y * width + x
+
+        if (x < 0 || x >= width || y < 0 || y >= height || visited.has(pixelKey)) {
+          continue
+        }
+
+        visited.add(pixelKey)
+
+        if (isColorSimilar(idx)) {
+          // Mark as transparent
+          result.data[idx] = imageData.data[idx]
+          result.data[idx + 1] = imageData.data[idx + 1]
+          result.data[idx + 2] = imageData.data[idx + 2]
+          result.data[idx + 3] = 0 // Set alpha to 0
+
+          // Add neighbors
+          queue.push([x + 1, y])
+          queue.push([x - 1, y])
+          queue.push([x, y + 1])
+          queue.push([x, y - 1])
+        } else {
+          // Keep original pixel
+          result.data[idx] = imageData.data[idx]
+          result.data[idx + 1] = imageData.data[idx + 1]
+          result.data[idx + 2] = imageData.data[idx + 2]
+          result.data[idx + 3] = imageData.data[idx + 3]
+        }
+      }
+    }
+
+    // Start flood fill from all edges
     for (let x = 0; x < width; x++) {
-      const idx = (y * width + x) * 4
-      const pixelKey = y * width + x
-      if (!visited.has(pixelKey)) {
-        result.data[idx] = imageData.data[idx]
-        result.data[idx + 1] = imageData.data[idx + 1]
-        result.data[idx + 2] = imageData.data[idx + 2]
-        result.data[idx + 3] = imageData.data[idx + 3]
+      floodFill(x, 0) // Top edge
+      floodFill(x, height - 1) // Bottom edge
+    }
+    for (let y = 0; y < height; y++) {
+      floodFill(0, y) // Left edge
+      floodFill(width - 1, y) // Right edge
+    }
+
+    // Copy remaining pixels
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = (y * width + x) * 4
+        const pixelKey = y * width + x
+        if (!visited.has(pixelKey)) {
+          result.data[idx] = imageData.data[idx]
+          result.data[idx + 1] = imageData.data[idx + 1]
+          result.data[idx + 2] = imageData.data[idx + 2]
+          result.data[idx + 3] = imageData.data[idx + 3]
+        }
       }
     }
   }
