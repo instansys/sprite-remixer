@@ -92,7 +92,7 @@ function App() {
     fps,
     targetWidth,
     targetHeight,
-    srcCols
+    outputCols
   })
 
   // Aspect ratio handling

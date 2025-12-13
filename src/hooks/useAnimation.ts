@@ -7,7 +7,7 @@ interface UseAnimationOptions {
   fps: number
   targetWidth: number
   targetHeight: number
-  srcCols: number
+  outputCols: number
 }
 
 export function useAnimation({
@@ -16,7 +16,7 @@ export function useAnimation({
   fps,
   targetWidth,
   targetHeight,
-  srcCols
+  outputCols: outputColsSetting
 }: UseAnimationOptions) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentFrame, setCurrentFrame] = useState(0)
@@ -39,7 +39,8 @@ export function useAnimation({
       const img = new Image()
       img.onload = () => {
         const frameIndex = currentFrame % selectedFrames.length
-        const outputCols = Math.min(selectedFrames.length, srcCols)
+        // Match the output layout calculation in spriteProcessing.ts
+        const outputCols = outputColsSetting > 0 ? outputColsSetting : Math.ceil(Math.sqrt(selectedFrames.length))
         const col = frameIndex % outputCols
         const row = Math.floor(frameIndex / outputCols)
 
@@ -63,7 +64,7 @@ export function useAnimation({
     }
 
     animationFrameRef.current = requestAnimationFrame(animate)
-  }, [isPlaying, processedImageUrl, selectedFrames, fps, currentFrame, srcCols, targetWidth, targetHeight])
+  }, [isPlaying, processedImageUrl, selectedFrames, fps, currentFrame, outputColsSetting, targetWidth, targetHeight])
 
   useEffect(() => {
     if (isPlaying) {
