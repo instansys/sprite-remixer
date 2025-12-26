@@ -6,6 +6,7 @@ interface SourceSettingsDialogProps {
   dialogCols: number
   dialogRows: number
   isProcessing: boolean
+  pendingCount?: number
   onColsChange: (cols: number) => void
   onRowsChange: (rows: number) => void
   onConfirm: () => void
@@ -17,6 +18,7 @@ export function SourceSettingsDialog({
   dialogCols,
   dialogRows,
   isProcessing,
+  pendingCount = 1,
   onColsChange,
   onRowsChange,
   onConfirm,
@@ -26,7 +28,7 @@ export function SourceSettingsDialog({
     <div className="source-dialog-overlay">
       <div className="source-dialog">
         <div className="source-dialog-header">
-          <h3>ソース設定</h3>
+          <h3>ソース設定{pendingCount > 1 && ` (残り${pendingCount}枚)`}</h3>
         </div>
         {isProcessing ? (
           <div className="loading-spinner">
@@ -59,7 +61,7 @@ export function SourceSettingsDialog({
             </div>
             <div className="source-dialog-actions">
               <button className="btn" onClick={onCancel}>
-                キャンセル
+                {pendingCount > 1 ? 'スキップ' : 'キャンセル'}
               </button>
               <button className="btn btn-primary" onClick={onConfirm}>
                 追加

@@ -62,10 +62,13 @@ function App() {
 
   // Source dialog state
   const [showSourceDialog, setShowSourceDialog] = useState(false)
-  const [pendingImage, setPendingImage] = useState<PendingImage | null>(null)
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([])
   const [dialogCols, setDialogCols] = useState(srcCols)
   const [dialogRows, setDialogRows] = useState(srcRows)
   const [isDialogProcessing, setIsDialogProcessing] = useState(false)
+
+  // Current pending image (first in queue)
+  const pendingImage = pendingImages.length > 0 ? pendingImages[0] : null
 
   // Refs
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -133,10 +136,13 @@ function App() {
       const reader = new FileReader()
       reader.onload = (event) => {
         const imageUrl = event.target?.result as string
-        setPendingImage({ file, imageUrl })
-        setDialogCols(srcCols)
-        setDialogRows(srcRows)
-        setShowSourceDialog(true)
+        setPendingImages(prev => [...prev, { file, imageUrl }])
+        // Only set dialog settings and show dialog for the first image in queue
+        if (!showSourceDialog) {
+          setDialogCols(srcCols)
+          setDialogRows(srcRows)
+          setShowSourceDialog(true)
+        }
         resolve()
       }
       reader.readAsDataURL(file)
@@ -229,8 +235,19 @@ function App() {
       requestAnimationFrame(() => {
         setTimeout(() => {
           setIsDialogProcessing(false)
-          setShowSourceDialog(false)
-          setPendingImage(null)
+          // Remove current image from queue
+          setPendingImages(prev => {
+            const remaining = prev.slice(1)
+            // If no more images, close dialog
+            if (remaining.length === 0) {
+              setShowSourceDialog(false)
+            } else {
+              // Reset dialog settings for next image
+              setDialogCols(srcCols)
+              setDialogRows(srcRows)
+            }
+            return remaining
+          })
           resolve(undefined)
         }, 100)
       })
@@ -238,8 +255,18 @@ function App() {
   }
 
   const cancelSourceSettings = () => {
-    setShowSourceDialog(false)
-    setPendingImage(null)
+    // Remove current image and process next one
+    setPendingImages(prev => {
+      const remaining = prev.slice(1)
+      if (remaining.length === 0) {
+        setShowSourceDialog(false)
+      } else {
+        // Reset dialog settings for next image
+        setDialogCols(srcCols)
+        setDialogRows(srcRows)
+      }
+      return remaining
+    })
   }
 
   // Process sprites
@@ -338,6 +365,7 @@ function App() {
           dialogCols={dialogCols}
           dialogRows={dialogRows}
           isProcessing={isDialogProcessing}
+          pendingCount={pendingImages.length}
           onColsChange={setDialogCols}
           onRowsChange={setDialogRows}
           onConfirm={confirmSourceSettings}
