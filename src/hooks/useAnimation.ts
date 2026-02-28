@@ -19,6 +19,7 @@ export function useAnimation({
   outputCols: outputColsSetting
 }: UseAnimationOptions) {
   const [isPlaying, setIsPlaying] = useState(false)
+  const [isReversed, setIsReversed] = useState(false)
   const [currentFrame, setCurrentFrame] = useState(0)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animationFrameRef = useRef<number>(0)
@@ -59,12 +60,17 @@ export function useAnimation({
       }
       img.src = processedImageUrl
 
-      setCurrentFrame(prev => (prev + 1) % selectedFrames.length)
+      setCurrentFrame(prev => {
+        if (isReversed) {
+          return (prev - 1 + selectedFrames.length) % selectedFrames.length
+        }
+        return (prev + 1) % selectedFrames.length
+      })
       lastFrameTimeRef.current = timestamp
     }
 
     animationFrameRef.current = requestAnimationFrame(animate)
-  }, [isPlaying, processedImageUrl, selectedFrames, fps, currentFrame, outputColsSetting, targetWidth, targetHeight])
+  }, [isPlaying, isReversed, processedImageUrl, selectedFrames, fps, currentFrame, outputColsSetting, targetWidth, targetHeight])
 
   useEffect(() => {
     if (isPlaying) {
@@ -123,9 +129,15 @@ export function useAnimation({
     setIsPlaying(prev => !prev)
   }, [])
 
+  const toggleReverse = useCallback(() => {
+    setIsReversed(prev => !prev)
+  }, [])
+
   return {
     isPlaying,
+    isReversed,
     togglePlayback,
+    toggleReverse,
     canvasRef
   }
 }

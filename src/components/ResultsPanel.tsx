@@ -1,23 +1,32 @@
 import type { RefObject } from 'react'
+import type { OutputFormat } from '../types'
 import { NumberInput } from '../NumberInput'
 
 interface ResultsPanelProps {
   processedImageUrl: string
   isPlaying: boolean
+  isReversed: boolean
   fps: number
+  outputFormat: OutputFormat
+  isEncodingGif: boolean
   animationCanvasRef: RefObject<HTMLCanvasElement | null>
   onDownload: () => void
   onTogglePlayback: () => void
+  onToggleReverse: () => void
   onFpsChange: (fps: number) => void
 }
 
 export function ResultsPanel({
   processedImageUrl,
   isPlaying,
+  isReversed,
   fps,
+  outputFormat,
+  isEncodingGif,
   animationCanvasRef,
   onDownload,
   onTogglePlayback,
+  onToggleReverse,
   onFpsChange
 }: ResultsPanelProps) {
   return (
@@ -30,8 +39,13 @@ export function ResultsPanel({
             alt="Processed sprite sheet"
             className="result-image"
           />
-          <button className="download-button" onClick={onDownload}>
-            ⬇️ ダウンロード
+          <button className="download-button" onClick={onDownload} disabled={isEncodingGif}>
+            {isEncodingGif
+              ? '⏳ GIF エンコード中...'
+              : outputFormat === 'gif'
+                ? '⬇️ GIF ダウンロード'
+                : '⬇️ ダウンロード'
+            }
           </button>
         </div>
       </div>
@@ -45,6 +59,9 @@ export function ResultsPanel({
           <div className="animation-buttons">
             <button onClick={onTogglePlayback}>
               {isPlaying ? '⏸ 停止' : '▶ 再生'}
+            </button>
+            <button onClick={onToggleReverse} className={isReversed ? 'active' : ''}>
+              ◀ 逆再生
             </button>
             <label>
               FPS

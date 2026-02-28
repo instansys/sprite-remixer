@@ -66,15 +66,17 @@ export function OutputSettings({
           disabled={lockAspectRatio}
         />
       </label>
-      <label>
-        横に並べる数
-        <NumberInput
-          min={0}
-          value={outputCols}
-          onChange={onOutputColsChange}
-        />
-        <span className="hint">0 = 自動</span>
-      </label>
+      {outputFormat !== 'gif' && (
+        <label>
+          横に並べる数
+          <NumberInput
+            min={0}
+            value={outputCols}
+            onChange={onOutputColsChange}
+          />
+          <span className="hint">0 = 自動</span>
+        </label>
+      )}
       <label>
         出力形式
         <div className="format-selector">
@@ -92,11 +94,21 @@ export function OutputSettings({
           >
             WebP
           </button>
+          <button
+            type="button"
+            className={`format-option ${outputFormat === 'gif' ? 'selected' : ''}`}
+            onClick={() => onOutputFormatChange('gif')}
+          >
+            GIF
+          </button>
         </div>
       </label>
       {selectedFrameCount > 0 && (
         <div className="sheet-size-info">
-          スプライトシート: {actualCols} x {actualRows} ({sheetWidth} x {sheetHeight} px)
+          {outputFormat === 'gif'
+            ? `アニメーション GIF: ${selectedFrameCount} フレーム (${targetWidth} x ${targetHeight} px)`
+            : `スプライトシート: ${actualCols} x ${actualRows} (${sheetWidth} x ${sheetHeight} px)`
+          }
         </div>
       )}
     </div>

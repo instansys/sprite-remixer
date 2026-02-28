@@ -24,7 +24,8 @@ import {
   downloadImage,
   saveSettingsToFile,
   loadSettingsFromFile,
-  getDefaultSettings
+  getDefaultSettings,
+  exportAnimatedGif
 } from './utils'
 
 function App() {
@@ -59,6 +60,8 @@ function App() {
   const [processedImageUrl, setProcessedImageUrl] = useState<string | null>(null)
   const [isProcessingVideo, setIsProcessingVideo] = useState(false)
   const [videoProgress, setVideoProgress] = useState<VideoProgress>({ current: 0, total: 0 })
+  const [isEncodingGif, setIsEncodingGif] = useState(false)
+  const [gifProgress, setGifProgress] = useState<VideoProgress>({ current: 0, total: 0 })
 
   // Source dialog state
   const [showSourceDialog, setShowSourceDialog] = useState(false)
@@ -88,7 +91,9 @@ function App() {
 
   const {
     isPlaying,
+    isReversed,
     togglePlayback,
+    toggleReverse,
     canvasRef: animationCanvasRef
   } = useAnimation({
     processedImageUrl,
@@ -277,7 +282,7 @@ function App() {
       targetWidth,
       targetHeight,
       outputCols,
-      outputFormat,
+      outputFormat: outputFormat === 'gif' ? 'png' : outputFormat,
       removeBackground,
       backgroundTolerance,
       edgeErosion,
@@ -332,8 +337,38 @@ function App() {
     setLockAspectRatio(locked)
   }, [])
 
-  const handleDownload = () => {
-    if (processedImageUrl) {
+  const handleDownload = async () => {
+    if (!processedImageUrl) return
+
+    if (outputFormat === 'gif') {
+      setIsEncodingGif(true)
+      setGifProgress({ current: 0, total: selectedFrames.length })
+      try {
+        const gifUrl = await exportAnimatedGif({
+          sourceImages,
+          selectedFrames,
+          targetWidth,
+          targetHeight,
+          fps,
+          removeBackground,
+          backgroundTolerance,
+          edgeErosion,
+          bgColorSource,
+          fillInterior,
+          onProgress: (current, total) => {
+            setGifProgress({ current, total })
+          }
+        })
+        if (gifUrl) {
+          downloadImage(gifUrl, 'sprite-animation.gif')
+          URL.revokeObjectURL(gifUrl)
+        }
+      } catch (error) {
+        console.error('Failed to encode GIF:', error)
+      } finally {
+        setIsEncodingGif(false)
+      }
+    } else {
       const ext = outputFormat === 'webp' ? 'webp' : 'png'
       downloadImage(processedImageUrl, `sprite-sheet-pixel-art.${ext}`)
     }
@@ -358,6 +393,7 @@ function App() {
       />
 
       {isProcessingVideo && <VideoProgressModal progress={videoProgress} />}
+      {isEncodingGif && <VideoProgressModal progress={gifProgress} />}
 
       {showSourceDialog && pendingImage && (
         <SourceSettingsDialog
@@ -445,10 +481,14 @@ function App() {
             <ResultsPanel
               processedImageUrl={processedImageUrl}
               isPlaying={isPlaying}
+              isReversed={isReversed}
               fps={fps}
+              outputFormat={outputFormat}
+              isEncodingGif={isEncodingGif}
               animationCanvasRef={animationCanvasRef}
               onDownload={handleDownload}
               onTogglePlayback={togglePlayback}
+              onToggleReverse={toggleReverse}
               onFpsChange={setFps}
             />
           )}
