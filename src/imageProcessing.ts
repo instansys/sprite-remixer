@@ -6,6 +6,45 @@ export interface ImageProcessingOptions {
   edgeErosion?: number
 }
 
+interface GridConfig {
+  peakThresholdMultiplier: number
+  peakDistanceFilter: number
+  walkerSearchWindowRatio: number
+  walkerMinSearchWindow: number
+  walkerStrengthThreshold: number
+  minCutsPerAxis: number
+  fallbackTargetSegments: number
+  maxStepRatio: number
+}
+
+export interface PixelSnapAnalysis {
+  logicalWidth: number
+  logicalHeight: number
+  pixelSizeX: number
+  pixelSizeY: number
+  detected: boolean
+}
+
+export interface ResolutionRecommendation {
+  label: string
+  width: number
+  height: number
+  scale: number
+  logicalWidth: number
+  logicalHeight: number
+}
+
+const PIXEL_SNAP_CONFIG: GridConfig = {
+  peakThresholdMultiplier: 0.2,
+  peakDistanceFilter: 4,
+  walkerSearchWindowRatio: 0.35,
+  walkerMinSearchWindow: 2,
+  walkerStrengthThreshold: 0.5,
+  minCutsPerAxis: 4,
+  fallbackTargetSegments: 64,
+  maxStepRatio: 1.8
+}
+
 /**
  * RGBからLab色空間に変換（知覚的な色差を計算するため）
  */
@@ -381,6 +420,508 @@ export function scaleImageNearestNeighbor(
   scaledCtx.drawImage(sourceCanvas, offsetX, offsetY, drawWidth, drawHeight)
 
   return scaledCanvas
+}
+
+function getOpaquePixelSamples(imageData: ImageData, maxSamples = 12000): number[][] {
+  const samples: number[][] = []
+  const totalPixels = imageData.width * imageData.height
+  const step = Math.max(1, Math.floor(totalPixels / maxSamples))
+
+  for (let pixelIndex = 0; pixelIndex < totalPixels; pixelIndex += step) {
+    const idx = pixelIndex * 4
+    if (imageData.data[idx + 3] > 0) {
+      samples.push([
+        imageData.data[idx],
+        imageData.data[idx + 1],
+        imageData.data[idx + 2]
+      ])
+    }
+  }
+
+  return samples
+}
+
+function distanceSquared(pixel: number[], centroid: number[]): number {
+  const dr = pixel[0] - centroid[0]
+  const dg = pixel[1] - centroid[1]
+  const db = pixel[2] - centroid[2]
+  return dr * dr + dg * dg + db * db
+}
+
+function buildQuantizedImageData(imageData: ImageData, kColors = 16): ImageData {
+  const samples = getOpaquePixelSamples(imageData)
+  if (samples.length === 0) {
+    return new ImageData(new Uint8ClampedArray(imageData.data), imageData.width, imageData.height)
+  }
+
+  const k = Math.min(kColors, samples.length)
+  const centroids: number[][] = [samples[0].slice()]
+
+  while (centroids.length < k) {
+    let farthestSample = samples[0]
+    let farthestDistance = -1
+
+    for (const sample of samples) {
+      const nearestDistance = centroids.reduce(
+        (best, centroid) => Math.min(best, distanceSquared(sample, centroid)),
+        Number.POSITIVE_INFINITY
+      )
+      if (nearestDistance > farthestDistance) {
+        farthestDistance = nearestDistance
+        farthestSample = sample
+      }
+    }
+
+    centroids.push(farthestSample.slice())
+  }
+
+  for (let iteration = 0; iteration < 12; iteration++) {
+    const sums = Array.from({ length: k }, () => [0, 0, 0])
+    const counts = Array.from({ length: k }, () => 0)
+
+    for (const sample of samples) {
+      let bestIndex = 0
+      let bestDistance = Number.POSITIVE_INFINITY
+
+      for (let i = 0; i < centroids.length; i++) {
+        const distance = distanceSquared(sample, centroids[i])
+        if (distance < bestDistance) {
+          bestDistance = distance
+          bestIndex = i
+        }
+      }
+
+      sums[bestIndex][0] += sample[0]
+      sums[bestIndex][1] += sample[1]
+      sums[bestIndex][2] += sample[2]
+      counts[bestIndex]++
+    }
+
+    let maxMovement = 0
+    for (let i = 0; i < k; i++) {
+      if (counts[i] === 0) continue
+      const next = [
+        sums[i][0] / counts[i],
+        sums[i][1] / counts[i],
+        sums[i][2] / counts[i]
+      ]
+      maxMovement = Math.max(maxMovement, distanceSquared(centroids[i], next))
+      centroids[i] = next
+    }
+
+    if (maxMovement < 0.01) break
+  }
+
+  const result = new ImageData(imageData.width, imageData.height)
+
+  for (let idx = 0; idx < imageData.data.length; idx += 4) {
+    const alpha = imageData.data[idx + 3]
+    if (alpha === 0) {
+      result.data[idx] = imageData.data[idx]
+      result.data[idx + 1] = imageData.data[idx + 1]
+      result.data[idx + 2] = imageData.data[idx + 2]
+      result.data[idx + 3] = alpha
+      continue
+    }
+
+    const pixel = [imageData.data[idx], imageData.data[idx + 1], imageData.data[idx + 2]]
+    let bestCentroid = centroids[0]
+    let bestDistance = Number.POSITIVE_INFINITY
+
+    for (const centroid of centroids) {
+      const distance = distanceSquared(pixel, centroid)
+      if (distance < bestDistance) {
+        bestDistance = distance
+        bestCentroid = centroid
+      }
+    }
+
+    result.data[idx] = Math.round(bestCentroid[0])
+    result.data[idx + 1] = Math.round(bestCentroid[1])
+    result.data[idx + 2] = Math.round(bestCentroid[2])
+    result.data[idx + 3] = alpha
+  }
+
+  return result
+}
+
+function computeProfiles(imageData: ImageData): { cols: number[]; rows: number[] } {
+  const { width, height, data } = imageData
+  const cols = Array.from({ length: width }, () => 0)
+  const rows = Array.from({ length: height }, () => 0)
+
+  const gray = (x: number, y: number): number => {
+    const idx = (y * width + x) * 4
+    if (data[idx + 3] === 0) return 0
+    return 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]
+  }
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      cols[x] += Math.abs(gray(x + 1, y) - gray(x - 1, y))
+    }
+  }
+
+  for (let x = 0; x < width; x++) {
+    for (let y = 1; y < height - 1; y++) {
+      rows[y] += Math.abs(gray(x, y + 1) - gray(x, y - 1))
+    }
+  }
+
+  return { cols, rows }
+}
+
+function estimateStepSize(profile: number[], config: GridConfig): number | null {
+  const maxValue = profile.reduce((max, value) => Math.max(max, value), 0)
+  if (maxValue <= 0) return null
+
+  const threshold = maxValue * config.peakThresholdMultiplier
+  const peaks: number[] = []
+
+  for (let i = 1; i < profile.length - 1; i++) {
+    if (profile[i] > threshold && profile[i] > profile[i - 1] && profile[i] > profile[i + 1]) {
+      peaks.push(i)
+    }
+  }
+
+  if (peaks.length < 2) return null
+
+  const cleanPeaks = [peaks[0]]
+  for (const peak of peaks.slice(1)) {
+    if (peak - cleanPeaks[cleanPeaks.length - 1] > config.peakDistanceFilter - 1) {
+      cleanPeaks.push(peak)
+    }
+  }
+
+  if (cleanPeaks.length < 2) return null
+
+  const distances: number[] = []
+  for (let i = 1; i < cleanPeaks.length; i++) {
+    distances.push(cleanPeaks[i] - cleanPeaks[i - 1])
+  }
+
+  distances.sort((a, b) => a - b)
+  const mid = Math.floor(distances.length / 2)
+  return distances.length % 2 === 0
+    ? (distances[mid - 1] + distances[mid]) / 2
+    : distances[mid]
+}
+
+function resolveStepSizes(
+  stepX: number | null,
+  stepY: number | null,
+  width: number,
+  height: number,
+  config: GridConfig
+): { x: number; y: number; detected: boolean } {
+  if (stepX && stepY) {
+    return { x: stepX, y: stepY, detected: true }
+  }
+
+  if (stepX) {
+    return { x: stepX, y: stepX, detected: true }
+  }
+
+  if (stepY) {
+    return { x: stepY, y: stepY, detected: true }
+  }
+
+  const fallback = Math.max(1, Math.min(width, height) / config.fallbackTargetSegments)
+  return { x: fallback, y: fallback, detected: false }
+}
+
+function sanitizeCuts(cuts: number[], limit: number): number[] {
+  const result = cuts
+    .map(value => Math.max(0, Math.min(limit, Math.round(value))))
+    .concat([0, limit])
+    .sort((a, b) => a - b)
+
+  return Array.from(new Set(result))
+}
+
+function walkGrid(profile: number[], stepSize: number, limit: number, config: GridConfig): number[] {
+  const cuts = [0]
+  let currentPosition = 0
+  const searchWindow = Math.max(
+    stepSize * config.walkerSearchWindowRatio,
+    config.walkerMinSearchWindow
+  )
+  const meanValue = profile.reduce((sum, value) => sum + value, 0) / Math.max(1, profile.length)
+
+  while (currentPosition < limit) {
+    const target = currentPosition + stepSize
+    if (target >= limit) {
+      cuts.push(limit)
+      break
+    }
+
+    const start = Math.max(Math.floor(target - searchWindow), Math.floor(currentPosition + 1), 0)
+    const end = Math.min(Math.ceil(target + searchWindow), limit - 1)
+
+    if (end <= start) {
+      currentPosition = target
+      continue
+    }
+
+    let bestIndex = start
+    let bestValue = -1
+    for (let i = start; i <= end; i++) {
+      if ((profile[i] ?? 0) > bestValue) {
+        bestValue = profile[i] ?? 0
+        bestIndex = i
+      }
+    }
+
+    if (bestValue > meanValue * config.walkerStrengthThreshold) {
+      cuts.push(bestIndex)
+      currentPosition = bestIndex
+    } else {
+      cuts.push(Math.round(target))
+      currentPosition = target
+    }
+  }
+
+  return sanitizeCuts(cuts, limit)
+}
+
+function snapUniformCuts(
+  profile: number[],
+  limit: number,
+  targetStep: number,
+  config: GridConfig,
+  minRequired: number
+): number[] {
+  if (limit <= 1) return [0, limit]
+
+  let desiredCells = Number.isFinite(targetStep) && targetStep > 0
+    ? Math.round(limit / targetStep)
+    : 0
+  desiredCells = Math.min(limit, Math.max(minRequired - 1, desiredCells, 1))
+
+  const cellWidth = limit / desiredCells
+  const searchWindow = Math.max(
+    cellWidth * config.walkerSearchWindowRatio,
+    config.walkerMinSearchWindow
+  )
+  const meanValue = profile.reduce((sum, value) => sum + value, 0) / Math.max(1, profile.length)
+  const cuts = [0]
+
+  for (let index = 1; index < desiredCells; index++) {
+    const target = cellWidth * index
+    const previous = cuts[cuts.length - 1]
+    if (previous + 1 >= limit) break
+
+    const start = Math.max(Math.floor(target - searchWindow), previous + 1, 0)
+    const end = Math.min(Math.ceil(target + searchWindow), limit - 1)
+    let bestIndex = start
+    let bestValue = -1
+
+    for (let i = start; i <= end; i++) {
+      const value = profile[i] ?? 0
+      if (value > bestValue) {
+        bestValue = value
+        bestIndex = i
+      }
+    }
+
+    if (bestValue < meanValue * config.walkerStrengthThreshold) {
+      bestIndex = Math.max(previous + 1, Math.min(limit - 1, Math.round(target)))
+    }
+
+    cuts.push(bestIndex)
+  }
+
+  cuts.push(limit)
+  return sanitizeCuts(cuts, limit)
+}
+
+function stabilizeCuts(
+  profile: number[],
+  cuts: number[],
+  limit: number,
+  siblingCuts: number[],
+  siblingLimit: number,
+  config: GridConfig
+): number[] {
+  const sanitized = sanitizeCuts(cuts, limit)
+  const minRequired = Math.min(limit + 1, Math.max(2, config.minCutsPerAxis))
+  const axisCells = sanitized.length - 1
+  const siblingCells = siblingCuts.length - 1
+  const siblingHasGrid = siblingLimit > 0 && siblingCells >= minRequired - 1
+  const stepsSkewed = siblingHasGrid && axisCells > 0 && (() => {
+    const axisStep = limit / axisCells
+    const siblingStep = siblingLimit / siblingCells
+    const ratio = axisStep / siblingStep
+    return ratio > config.maxStepRatio || ratio < 1 / config.maxStepRatio
+  })()
+
+  if (sanitized.length >= minRequired && !stepsSkewed) {
+    return sanitized
+  }
+
+  const targetStep = siblingHasGrid
+    ? siblingLimit / siblingCells
+    : limit / config.fallbackTargetSegments
+
+  return snapUniformCuts(profile, limit, targetStep, config, minRequired)
+}
+
+function getGridCuts(imageData: ImageData): { cols: number[]; rows: number[]; analysis: PixelSnapAnalysis } {
+  const quantized = buildQuantizedImageData(imageData)
+  const profiles = computeProfiles(quantized)
+  const stepX = estimateStepSize(profiles.cols, PIXEL_SNAP_CONFIG)
+  const stepY = estimateStepSize(profiles.rows, PIXEL_SNAP_CONFIG)
+  const resolved = resolveStepSizes(stepX, stepY, imageData.width, imageData.height, PIXEL_SNAP_CONFIG)
+
+  const rawCols = walkGrid(profiles.cols, resolved.x, imageData.width, PIXEL_SNAP_CONFIG)
+  const rawRows = walkGrid(profiles.rows, resolved.y, imageData.height, PIXEL_SNAP_CONFIG)
+  const cols = stabilizeCuts(
+    profiles.cols,
+    rawCols,
+    imageData.width,
+    rawRows,
+    imageData.height,
+    PIXEL_SNAP_CONFIG
+  )
+  const rows = stabilizeCuts(
+    profiles.rows,
+    rawRows,
+    imageData.height,
+    cols,
+    imageData.width,
+    PIXEL_SNAP_CONFIG
+  )
+
+  return {
+    cols,
+    rows,
+    analysis: {
+      logicalWidth: Math.max(1, cols.length - 1),
+      logicalHeight: Math.max(1, rows.length - 1),
+      pixelSizeX: resolved.x,
+      pixelSizeY: resolved.y,
+      detected: resolved.detected
+    }
+  }
+}
+
+function resampleToPixelGrid(imageData: ImageData, cols: number[], rows: number[]): HTMLCanvasElement {
+  const quantized = buildQuantizedImageData(imageData)
+  const outputWidth = Math.max(1, cols.length - 1)
+  const outputHeight = Math.max(1, rows.length - 1)
+  const output = new ImageData(outputWidth, outputHeight)
+
+  for (let yIndex = 0; yIndex < rows.length - 1; yIndex++) {
+    for (let xIndex = 0; xIndex < cols.length - 1; xIndex++) {
+      const xs = cols[xIndex]
+      const xe = cols[xIndex + 1]
+      const ys = rows[yIndex]
+      const ye = rows[yIndex + 1]
+      const counts = new Map<string, { color: number[]; count: number }>()
+
+      for (let y = ys; y < ye; y++) {
+        for (let x = xs; x < xe; x++) {
+          const sourceIdx = (y * quantized.width + x) * 4
+          const color = [
+            quantized.data[sourceIdx],
+            quantized.data[sourceIdx + 1],
+            quantized.data[sourceIdx + 2],
+            quantized.data[sourceIdx + 3]
+          ]
+          const key = color.join(',')
+          const current = counts.get(key)
+          if (current) {
+            current.count++
+          } else {
+            counts.set(key, { color, count: 1 })
+          }
+        }
+      }
+
+      const winner = Array.from(counts.values()).sort((a, b) => {
+        if (b.count !== a.count) return b.count - a.count
+        return a.color.join(',').localeCompare(b.color.join(','))
+      })[0]
+      const targetIdx = (yIndex * outputWidth + xIndex) * 4
+
+      if (winner) {
+        output.data[targetIdx] = winner.color[0]
+        output.data[targetIdx + 1] = winner.color[1]
+        output.data[targetIdx + 2] = winner.color[2]
+        output.data[targetIdx + 3] = winner.color[3]
+      }
+    }
+  }
+
+  const canvas = document.createElement('canvas')
+  canvas.width = outputWidth
+  canvas.height = outputHeight
+  const ctx = canvas.getContext('2d', {
+    alpha: true,
+    colorSpace: 'srgb',
+    willReadFrequently: true
+  })
+  if (!ctx) {
+    throw new Error('Failed to get canvas context')
+  }
+
+  ctx.putImageData(output, 0, 0)
+  return canvas
+}
+
+export function analyzePixelSnapCanvas(sourceCanvas: HTMLCanvasElement): PixelSnapAnalysis {
+  const ctx = sourceCanvas.getContext('2d', {
+    alpha: true,
+    colorSpace: 'srgb',
+    willReadFrequently: true
+  })
+  if (!ctx || sourceCanvas.width < 3 || sourceCanvas.height < 3) {
+    return {
+      logicalWidth: sourceCanvas.width,
+      logicalHeight: sourceCanvas.height,
+      pixelSizeX: 1,
+      pixelSizeY: 1,
+      detected: false
+    }
+  }
+
+  return getGridCuts(ctx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height)).analysis
+}
+
+export function getPixelSnapResolutionRecommendations(
+  sourceCanvas: HTMLCanvasElement
+): ResolutionRecommendation[] {
+  const analysis = analyzePixelSnapCanvas(sourceCanvas)
+  return [1, 2, 4].map(scale => ({
+    label: `${scale}x`,
+    width: Math.max(8, analysis.logicalWidth * scale),
+    height: Math.max(8, analysis.logicalHeight * scale),
+    scale,
+    logicalWidth: analysis.logicalWidth,
+    logicalHeight: analysis.logicalHeight
+  }))
+}
+
+export function scaleImageWithPixelSnap(
+  sourceCanvas: HTMLCanvasElement,
+  targetWidth: number,
+  targetHeight: number
+): HTMLCanvasElement {
+  const ctx = sourceCanvas.getContext('2d', {
+    alpha: true,
+    colorSpace: 'srgb',
+    willReadFrequently: true
+  })
+
+  if (!ctx || sourceCanvas.width < 3 || sourceCanvas.height < 3) {
+    return scaleImageNearestNeighbor(sourceCanvas, targetWidth, targetHeight)
+  }
+
+  const imageData = ctx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height)
+  const { cols, rows } = getGridCuts(imageData)
+  const snappedCanvas = resampleToPixelGrid(imageData, cols, rows)
+
+  return scaleImageNearestNeighbor(snappedCanvas, targetWidth, targetHeight)
 }
 
 export function exportCanvasAsPNG(canvas: HTMLCanvasElement): string {

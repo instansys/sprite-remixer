@@ -33,6 +33,7 @@ export function getDefaultSettings(): AppSettings {
     srcRows: DEFAULT_SETTINGS.srcRows,
     targetWidth: DEFAULT_SETTINGS.targetWidth,
     targetHeight: DEFAULT_SETTINGS.targetHeight,
+    pixelPerfectResize: DEFAULT_SETTINGS.pixelPerfectResize,
     fps: DEFAULT_SETTINGS.fps
   }
 }

@@ -1,10 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 
-import type { PendingImage, FrameSamplingQuality, OutputFormat, VideoProgress, SourceImage } from './types'
+import type {
+  PendingImage,
+  FrameSamplingQuality,
+  OutputFormat,
+  VideoProgress,
+  SourceImage,
+  ResolutionRecommendation
+} from './types'
 import type { BackgroundColorSource } from './imageProcessing'
+import { getPixelSnapResolutionRecommendations } from './imageProcessing'
 import { STORAGE_KEYS, DEFAULT_SETTINGS } from './constants'
-import { useLocalStorage, useLocalStorageString, useFrameSelection, useAnimation, useSourceImages } from './hooks'
+import {
+  useLocalStorage,
+  useLocalStorageString,
+  useLocalStorageBoolean,
+  useFrameSelection,
+  useAnimation,
+  useSourceImages
+} from './hooks'
 import {
   Header,
   VideoProgressModal,
@@ -50,6 +65,10 @@ function App() {
     STORAGE_KEYS.outputFormat,
     DEFAULT_SETTINGS.outputFormat
   )
+  const [pixelPerfectResize, setPixelPerfectResize] = useLocalStorageBoolean(
+    STORAGE_KEYS.pixelPerfectResize,
+    DEFAULT_SETTINGS.pixelPerfectResize
+  )
   const [fps, setFps] = useLocalStorage(STORAGE_KEYS.fps, DEFAULT_SETTINGS.fps)
   const [frameSamplingQuality, setFrameSamplingQuality] = useLocalStorageString<FrameSamplingQuality>(
     STORAGE_KEYS.frameSamplingQuality,
@@ -69,6 +88,7 @@ function App() {
 
   // Processing state
   const [processedImageUrl, setProcessedImageUrl] = useState<string | null>(null)
+  const [resolutionRecommendations, setResolutionRecommendations] = useState<ResolutionRecommendation[]>([])
   const [isProcessingVideo, setIsProcessingVideo] = useState(false)
   const [videoProgress, setVideoProgress] = useState<VideoProgress>({ current: 0, total: 0 })
   const [isEncodingGif, setIsEncodingGif] = useState(false)
@@ -128,6 +148,72 @@ function App() {
     }
     prevTargetWidthRef.current = targetWidth
   }, [targetWidth, lockAspectRatio, setTargetHeight])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const updateRecommendations = async () => {
+      const frame = selectedFrames[0] ?? frames[0]
+      const source = frame ? sourceImages[frame.sourceIndex] : null
+
+      if (!frame || !source) {
+        setResolutionRecommendations([])
+        return
+      }
+
+      try {
+        const img = new Image()
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve()
+          img.onerror = reject
+          img.src = source.imageUrl
+        })
+
+        if (cancelled) return
+
+        const frameWidth = img.width / source.cols
+        const frameHeight = img.height / source.rows
+        const canvas = document.createElement('canvas')
+        canvas.width = frameWidth
+        canvas.height = frameHeight
+        const ctx = canvas.getContext('2d', {
+          alpha: true,
+          colorSpace: 'srgb',
+          willReadFrequently: true
+        })
+
+        if (!ctx) {
+          setResolutionRecommendations([])
+          return
+        }
+
+        ctx.imageSmoothingEnabled = false
+        ctx.drawImage(
+          img,
+          frame.x * frameWidth,
+          frame.y * frameHeight,
+          frameWidth,
+          frameHeight,
+          0,
+          0,
+          frameWidth,
+          frameHeight
+        )
+
+        const recommendations = getPixelSnapResolutionRecommendations(canvas)
+        if (!cancelled) setResolutionRecommendations(recommendations)
+      } catch (error) {
+        console.error('Failed to calculate pixel snap recommendations:', error)
+        if (!cancelled) setResolutionRecommendations([])
+      }
+    }
+
+    updateRecommendations()
+
+    return () => {
+      cancelled = true
+    }
+  }, [frames, selectedFrames, sourceImages])
 
   // File upload handling
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -353,7 +439,8 @@ function App() {
       backgroundTolerance,
       edgeErosion,
       bgColorSource,
-      fillInterior
+      fillInterior,
+      pixelPerfectResize
     })
     setProcessedImageUrl(result)
   }
@@ -365,6 +452,7 @@ function App() {
       srcRows,
       targetWidth,
       targetHeight,
+      pixelPerfectResize,
       fps
     })
   }
@@ -380,6 +468,9 @@ function App() {
         if (settings.srcRows) setSrcRows(settings.srcRows)
         if (settings.targetWidth) setTargetWidth(settings.targetWidth)
         if (settings.targetHeight) setTargetHeight(settings.targetHeight)
+        if (typeof settings.pixelPerfectResize === 'boolean') {
+          setPixelPerfectResize(settings.pixelPerfectResize)
+        }
         if (settings.fps) setFps(settings.fps)
       })
       .catch((error) => {
@@ -393,6 +484,7 @@ function App() {
     setSrcRows(defaults.srcRows)
     setTargetWidth(defaults.targetWidth)
     setTargetHeight(defaults.targetHeight)
+    setPixelPerfectResize(defaults.pixelPerfectResize)
     setFps(defaults.fps)
   }
 
@@ -416,6 +508,7 @@ function App() {
           targetWidth,
           targetHeight,
           fps,
+          pixelPerfectResize,
           removeBackground,
           backgroundTolerance,
           edgeErosion,
@@ -506,12 +599,15 @@ function App() {
               lockAspectRatio={lockAspectRatio}
               outputCols={outputCols}
               outputFormat={outputFormat}
+              pixelPerfectResize={pixelPerfectResize}
+              resolutionRecommendations={resolutionRecommendations}
               selectedFrameCount={selectedCount}
               onWidthChange={setTargetWidth}
               onHeightChange={setTargetHeight}
               onLockAspectRatioChange={handleLockAspectRatioChange}
               onOutputColsChange={setOutputCols}
               onOutputFormatChange={setOutputFormat}
+              onPixelPerfectResizeChange={setPixelPerfectResize}
             />
 
             <BackgroundRemovalSettings

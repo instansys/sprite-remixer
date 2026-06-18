@@ -14,6 +14,7 @@ export const STORAGE_KEYS = {
   targetHeight: 'sprite-remixer-target-height',
   outputCols: 'sprite-remixer-output-cols',
   outputFormat: 'sprite-remixer-output-format',
+  pixelPerfectResize: 'sprite-remixer-pixel-perfect-resize',
   fps: 'sprite-remixer-fps',
   frameSamplingQuality: 'sprite-remixer-frame-sampling-quality'
 } as const
@@ -25,6 +26,7 @@ export const DEFAULT_SETTINGS = {
   targetHeight: 32,
   outputCols: 0, // 0 = auto
   outputFormat: 'webp' as OutputFormat,
+  pixelPerfectResize: true,
   fps: 12,
   frameSamplingQuality: 'medium' as FrameSamplingQuality
 } as const

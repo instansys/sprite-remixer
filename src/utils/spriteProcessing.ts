@@ -1,6 +1,11 @@
 import type { FrameData, OutputFormat, SourceImage } from '../types'
 import type { BackgroundColorSource } from '../imageProcessing'
-import { scaleImageNearestNeighbor, removeBackgroundFromImage, exportCanvas } from '../imageProcessing'
+import {
+  scaleImageNearestNeighbor,
+  scaleImageWithPixelSnap,
+  removeBackgroundFromImage,
+  exportCanvas
+} from '../imageProcessing'
 
 interface ProcessSpritesOptions {
   sourceImages: SourceImage[]
@@ -14,6 +19,7 @@ interface ProcessSpritesOptions {
   edgeErosion: number
   bgColorSource: BackgroundColorSource
   fillInterior: boolean
+  pixelPerfectResize: boolean
 }
 
 export async function processSprites(options: ProcessSpritesOptions): Promise<string | null> {
@@ -28,7 +34,8 @@ export async function processSprites(options: ProcessSpritesOptions): Promise<st
     backgroundTolerance,
     edgeErosion,
     bgColorSource,
-    fillInterior
+    fillInterior,
+    pixelPerfectResize
   } = options
 
   if (sourceImages.length === 0 || selectedFrames.length === 0) {
@@ -105,7 +112,9 @@ export async function processSprites(options: ProcessSpritesOptions): Promise<st
       frameHeight
     )
 
-    const scaledCanvas = scaleImageNearestNeighbor(tempCanvas, targetWidth, targetHeight)
+    const scaledCanvas = pixelPerfectResize
+      ? scaleImageWithPixelSnap(tempCanvas, targetWidth, targetHeight)
+      : scaleImageNearestNeighbor(tempCanvas, targetWidth, targetHeight)
     const scaledCtx = scaledCanvas.getContext('2d')
     if (!scaledCtx) return
 

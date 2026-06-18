@@ -1,7 +1,7 @@
 import { GIFEncoder, quantize, applyPalette } from 'gifenc'
 import type { FrameData, SourceImage } from '../types'
 import type { BackgroundColorSource } from '../imageProcessing'
-import { scaleImageNearestNeighbor, removeBackgroundFromImage } from '../imageProcessing'
+import { scaleImageNearestNeighbor, scaleImageWithPixelSnap, removeBackgroundFromImage } from '../imageProcessing'
 
 interface GifExportOptions {
   sourceImages: SourceImage[]
@@ -14,6 +14,7 @@ interface GifExportOptions {
   edgeErosion: number
   bgColorSource: BackgroundColorSource
   fillInterior: boolean
+  pixelPerfectResize: boolean
   onProgress?: (current: number, total: number) => void
 }
 
@@ -29,6 +30,7 @@ export async function exportAnimatedGif(options: GifExportOptions): Promise<stri
     edgeErosion,
     bgColorSource,
     fillInterior,
+    pixelPerfectResize,
     onProgress
   } = options
 
@@ -81,8 +83,9 @@ export async function exportAnimatedGif(options: GifExportOptions): Promise<stri
     tempCtx.imageSmoothingQuality = 'low'
     tempCtx.drawImage(sourceImg, srcX, srcY, frameWidth, frameHeight, 0, 0, frameWidth, frameHeight)
 
-    // Scale with nearest neighbor
-    const scaledCanvas = scaleImageNearestNeighbor(tempCanvas, targetWidth, targetHeight)
+    const scaledCanvas = pixelPerfectResize
+      ? scaleImageWithPixelSnap(tempCanvas, targetWidth, targetHeight)
+      : scaleImageNearestNeighbor(tempCanvas, targetWidth, targetHeight)
     const scaledCtx = scaledCanvas.getContext('2d')
     if (!scaledCtx) continue
 

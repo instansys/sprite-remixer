@@ -252,6 +252,50 @@ h1 {
   margin-left: 0.5rem;
 }
 
+.resolution-recommendations {
+  margin: 0.25rem 0 0.875rem;
+}
+
+.recommendation-title {
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  margin-bottom: 0.5rem;
+}
+
+.recommendation-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.recommendation-option {
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.125rem;
+  padding: 0.5rem 0.625rem;
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+
+.recommendation-option span {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.recommendation-option strong {
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.recommendation-option.selected {
+  border-color: var(--accent-primary);
+  background: rgba(99, 102, 241, 0.16);
+}
+
 .sheet-size-info {
   margin-top: 0.75rem;
   padding: 0.625rem 0.875rem;

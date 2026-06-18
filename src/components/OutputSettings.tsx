@@ -1,4 +1,4 @@
-import type { OutputFormat } from '../types'
+import type { OutputFormat, ResolutionRecommendation } from '../types'
 import { NumberInput } from '../NumberInput'
 
 interface OutputSettingsProps {
@@ -7,12 +7,15 @@ interface OutputSettingsProps {
   lockAspectRatio: boolean
   outputCols: number
   outputFormat: OutputFormat
+  pixelPerfectResize: boolean
+  resolutionRecommendations: ResolutionRecommendation[]
   selectedFrameCount: number
   onWidthChange: (width: number) => void
   onHeightChange: (height: number) => void
   onLockAspectRatioChange: (locked: boolean, currentRatio: number) => void
   onOutputColsChange: (cols: number) => void
   onOutputFormatChange: (format: OutputFormat) => void
+  onPixelPerfectResizeChange: (enabled: boolean) => void
 }
 
 export function OutputSettings({
@@ -21,12 +24,15 @@ export function OutputSettings({
   lockAspectRatio,
   outputCols,
   outputFormat,
+  pixelPerfectResize,
+  resolutionRecommendations,
   selectedFrameCount,
   onWidthChange,
   onHeightChange,
   onLockAspectRatioChange,
   onOutputColsChange,
-  onOutputFormatChange
+  onOutputFormatChange,
+  onPixelPerfectResizeChange
 }: OutputSettingsProps) {
   // Calculate actual cols/rows for the sprite sheet
   const actualCols = outputCols > 0 ? outputCols : Math.ceil(Math.sqrt(selectedFrameCount))
@@ -37,6 +43,14 @@ export function OutputSettings({
   return (
     <div className="control-group">
       <h3>出力設定</h3>
+      <label>
+        ドット保持リサイズ
+        <input
+          type="checkbox"
+          checked={pixelPerfectResize}
+          onChange={(e) => onPixelPerfectResizeChange(e.target.checked)}
+        />
+      </label>
       <label>
         アスペクト比固定
         <input
@@ -66,6 +80,31 @@ export function OutputSettings({
           disabled={lockAspectRatio}
         />
       </label>
+      {pixelPerfectResize && resolutionRecommendations.length > 0 && (
+        <div className="resolution-recommendations">
+          <div className="recommendation-title">おすすめ解像度</div>
+          <div className="recommendation-options">
+            {resolutionRecommendations.map((recommendation) => {
+              const selected = recommendation.width === targetWidth && recommendation.height === targetHeight
+              return (
+                <button
+                  key={`${recommendation.width}x${recommendation.height}`}
+                  type="button"
+                  className={`recommendation-option ${selected ? 'selected' : ''}`}
+                  onClick={() => {
+                    onWidthChange(recommendation.width)
+                    onHeightChange(recommendation.height)
+                  }}
+                  title={`論理解像度 ${recommendation.logicalWidth} x ${recommendation.logicalHeight} の ${recommendation.scale} 倍`}
+                >
+                  <span>{recommendation.label}</span>
+                  <strong>{recommendation.width} x {recommendation.height}</strong>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
       {outputFormat !== 'gif' && (
         <label>
           横に並べる数

@@ -35,6 +35,15 @@ export type FrameSamplingQuality = 'low' | 'medium' | 'high' | 'ultra'
 
 export type OutputFormat = 'png' | 'webp' | 'gif'
 
+export interface ResolutionRecommendation {
+  label: string
+  width: number
+  height: number
+  scale: number
+  logicalWidth: number
+  logicalHeight: number
+}
+
 export interface SamplingConfig {
   label: string
   sampleInterval: number
@@ -51,5 +60,6 @@ export interface AppSettings {
   srcRows: number
   targetWidth: number
   targetHeight: number
+  pixelPerfectResize: boolean
   fps: number
 }
