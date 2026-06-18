@@ -31,7 +31,7 @@ export interface PendingImage {
   detectedRows?: number
 }
 
-export type FrameSamplingQuality = 'low' | 'medium' | 'high' | 'ultra'
+export type FrameSamplingQuality = 'low' | 'medium' | 'high' | 'ultra' | 'all'
 
 export type OutputFormat = 'png' | 'webp' | 'gif'
 
@@ -47,7 +47,7 @@ export interface ResolutionRecommendation {
 export interface SamplingConfig {
   label: string
   sampleInterval: number
-  maxFrames: number
+  maxFrames: number | null
 }
 
 export interface VideoProgress {

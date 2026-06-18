@@ -4,7 +4,8 @@ export const SAMPLING_CONFIGS: Record<FrameSamplingQuality, SamplingConfig> = {
   low: { label: '低 (軽い)', sampleInterval: 15, maxFrames: 30 },
   medium: { label: '中 (標準)', sampleInterval: 10, maxFrames: 50 },
   high: { label: '高 (詳細)', sampleInterval: 5, maxFrames: 100 },
-  ultra: { label: '最高 (全)', sampleInterval: 2, maxFrames: 200 }
+  ultra: { label: '最高', sampleInterval: 2, maxFrames: 200 },
+  all: { label: '毎フレーム', sampleInterval: 1, maxFrames: null }
 }
 
 export const STORAGE_KEYS = {

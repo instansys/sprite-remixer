@@ -41,7 +41,10 @@ export async function extractVideoFrames(
 
   const samplingConfig = SAMPLING_CONFIGS[quality]
   const sampleInterval = samplingConfig.sampleInterval
-  const samplesToTake = Math.min(Math.floor(totalFrames / sampleInterval), samplingConfig.maxFrames)
+  const availableSamples = Math.floor(totalFrames / sampleInterval)
+  const samplesToTake = samplingConfig.maxFrames === null
+    ? availableSamples
+    : Math.min(availableSamples, samplingConfig.maxFrames)
 
   onProgress({ current: 0, total: samplesToTake })
 

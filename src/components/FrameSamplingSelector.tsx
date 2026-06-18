@@ -8,6 +8,14 @@ interface FrameSamplingSelectorProps {
 }
 
 export function FrameSamplingSelector({ value, onChange, disabled }: FrameSamplingSelectorProps) {
+  const config = SAMPLING_CONFIGS[value]
+  const samplingDescription = config.sampleInterval === 1
+    ? '毎フレームサンプリング'
+    : `${config.sampleInterval}フレームごとにサンプリング`
+  const maxFramesDescription = config.maxFrames === null
+    ? '上限なし'
+    : `最大${config.maxFrames}フレーム`
+
   return (
     <div className="control-group">
       <h3>動画/GIF フレーム分割</h3>
@@ -24,9 +32,9 @@ export function FrameSamplingSelector({ value, onChange, disabled }: FrameSampli
         ))}
       </div>
       <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.5rem', marginBottom: 0 }}>
-        {SAMPLING_CONFIGS[value].sampleInterval}フレームごとにサンプリング (最大{SAMPLING_CONFIGS[value].maxFrames}フレーム)
+        {samplingDescription} ({maxFramesDescription})
       </p>
-      {(value === 'high' || value === 'ultra') && (
+      {(value === 'high' || value === 'ultra' || value === 'all') && (
         <div className="quality-warning">
           <span className="quality-warning-icon">⚠️</span>
           <span>
