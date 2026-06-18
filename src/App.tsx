@@ -86,6 +86,10 @@ function App() {
     STORAGE_KEYS.pixelPerfectResize,
     DEFAULT_SETTINGS.pixelPerfectResize
   )
+  const [flipHorizontal, setFlipHorizontal] = useLocalStorageBoolean(
+    STORAGE_KEYS.flipHorizontal,
+    DEFAULT_SETTINGS.flipHorizontal
+  )
   const [fps, setFps] = useLocalStorage(STORAGE_KEYS.fps, DEFAULT_SETTINGS.fps)
   const [frameSamplingQuality, setFrameSamplingQuality] = useLocalStorageString<FrameSamplingQuality>(
     STORAGE_KEYS.frameSamplingQuality,
@@ -476,7 +480,8 @@ function App() {
       edgeErosion,
       bgColorSource,
       fillInterior,
-      pixelPerfectResize
+      pixelPerfectResize,
+      flipHorizontal
     })
     setProcessedImageUrl(result)
   }
@@ -489,6 +494,7 @@ function App() {
       targetWidth,
       targetHeight,
       pixelPerfectResize,
+      flipHorizontal,
       fps
     })
   }
@@ -507,6 +513,9 @@ function App() {
         if (typeof settings.pixelPerfectResize === 'boolean') {
           setPixelPerfectResize(settings.pixelPerfectResize)
         }
+        if (typeof settings.flipHorizontal === 'boolean') {
+          setFlipHorizontal(settings.flipHorizontal)
+        }
         if (settings.fps) setFps(settings.fps)
       })
       .catch((error) => {
@@ -521,6 +530,7 @@ function App() {
     setTargetWidth(defaults.targetWidth)
     setTargetHeight(defaults.targetHeight)
     setPixelPerfectResize(defaults.pixelPerfectResize)
+    setFlipHorizontal(defaults.flipHorizontal)
     setFps(defaults.fps)
   }
 
@@ -545,6 +555,7 @@ function App() {
           targetHeight,
           fps,
           pixelPerfectResize,
+          flipHorizontal,
           removeBackground,
           backgroundTolerance,
           edgeErosion,
@@ -636,6 +647,7 @@ function App() {
               outputCols={outputCols}
               outputFormat={outputFormat}
               pixelPerfectResize={pixelPerfectResize}
+              flipHorizontal={flipHorizontal}
               resolutionRecommendations={resolutionRecommendations}
               selectedFrameCount={selectedCount}
               onWidthChange={setTargetWidth}
@@ -644,6 +656,7 @@ function App() {
               onOutputColsChange={setOutputCols}
               onOutputFormatChange={setOutputFormat}
               onPixelPerfectResizeChange={setPixelPerfectResize}
+              onFlipHorizontalChange={setFlipHorizontal}
             />
 
             <BackgroundRemovalSettings

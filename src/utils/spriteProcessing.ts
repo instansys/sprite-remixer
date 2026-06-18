@@ -4,6 +4,7 @@ import {
   scaleImageNearestNeighbor,
   scaleImageWithPixelSnap,
   removeBackgroundFromImage,
+  flipCanvasHorizontal,
   exportCanvas
 } from '../imageProcessing'
 import { buildStablePixelSnapTargets, extractFrameCanvas } from './pixelSnapTargets'
@@ -21,6 +22,7 @@ interface ProcessSpritesOptions {
   bgColorSource: BackgroundColorSource
   fillInterior: boolean
   pixelPerfectResize: boolean
+  flipHorizontal: boolean
 }
 
 export async function processSprites(options: ProcessSpritesOptions): Promise<string | null> {
@@ -36,7 +38,8 @@ export async function processSprites(options: ProcessSpritesOptions): Promise<st
     edgeErosion,
     bgColorSource,
     fillInterior,
-    pixelPerfectResize
+    pixelPerfectResize,
+    flipHorizontal
   } = options
 
   if (sourceImages.length === 0 || selectedFrames.length === 0) {
@@ -90,7 +93,7 @@ export async function processSprites(options: ProcessSpritesOptions): Promise<st
     const tempCanvas = extractFrameCanvas(sourceImg, source, frame)
     if (!tempCanvas) return
 
-    const scaledCanvas = pixelPerfectResize
+    let scaledCanvas = pixelPerfectResize
       ? scaleImageWithPixelSnap(tempCanvas, targetWidth, targetHeight, pixelSnapTargets[frame.sourceIndex])
       : scaleImageNearestNeighbor(tempCanvas, targetWidth, targetHeight)
     const scaledCtx = scaledCanvas.getContext('2d')
@@ -108,6 +111,10 @@ export async function processSprites(options: ProcessSpritesOptions): Promise<st
         fillInterior
       )
       scaledCtx.putImageData(processedData, 0, 0)
+    }
+
+    if (flipHorizontal) {
+      scaledCanvas = flipCanvasHorizontal(scaledCanvas)
     }
 
     ctx.drawImage(

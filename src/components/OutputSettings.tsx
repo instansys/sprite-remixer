@@ -8,6 +8,7 @@ interface OutputSettingsProps {
   outputCols: number
   outputFormat: OutputFormat
   pixelPerfectResize: boolean
+  flipHorizontal: boolean
   resolutionRecommendations: ResolutionRecommendation[]
   selectedFrameCount: number
   onWidthChange: (width: number) => void
@@ -16,6 +17,7 @@ interface OutputSettingsProps {
   onOutputColsChange: (cols: number) => void
   onOutputFormatChange: (format: OutputFormat) => void
   onPixelPerfectResizeChange: (enabled: boolean) => void
+  onFlipHorizontalChange: (enabled: boolean) => void
 }
 
 export function OutputSettings({
@@ -25,6 +27,7 @@ export function OutputSettings({
   outputCols,
   outputFormat,
   pixelPerfectResize,
+  flipHorizontal,
   resolutionRecommendations,
   selectedFrameCount,
   onWidthChange,
@@ -32,7 +35,8 @@ export function OutputSettings({
   onLockAspectRatioChange,
   onOutputColsChange,
   onOutputFormatChange,
-  onPixelPerfectResizeChange
+  onPixelPerfectResizeChange,
+  onFlipHorizontalChange
 }: OutputSettingsProps) {
   // Calculate actual cols/rows for the sprite sheet
   const actualCols = outputCols > 0 ? outputCols : Math.ceil(Math.sqrt(selectedFrameCount))
@@ -49,6 +53,14 @@ export function OutputSettings({
           type="checkbox"
           checked={pixelPerfectResize}
           onChange={(e) => onPixelPerfectResizeChange(e.target.checked)}
+        />
+      </label>
+      <label>
+        左右反転
+        <input
+          type="checkbox"
+          checked={flipHorizontal}
+          onChange={(e) => onFlipHorizontalChange(e.target.checked)}
         />
       </label>
       <label>

@@ -61,5 +61,6 @@ export interface AppSettings {
   targetWidth: number
   targetHeight: number
   pixelPerfectResize: boolean
+  flipHorizontal: boolean
   fps: number
 }

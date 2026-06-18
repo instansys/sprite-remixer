@@ -1106,6 +1106,27 @@ export function scaleImageWithPixelSnap(
   return scaleImageNearestNeighbor(snappedCanvas, targetWidth, targetHeight)
 }
 
+export function flipCanvasHorizontal(sourceCanvas: HTMLCanvasElement): HTMLCanvasElement {
+  const flippedCanvas = document.createElement('canvas')
+  flippedCanvas.width = sourceCanvas.width
+  flippedCanvas.height = sourceCanvas.height
+  const ctx = flippedCanvas.getContext('2d', {
+    alpha: true,
+    colorSpace: 'srgb',
+    willReadFrequently: true
+  })
+  if (!ctx) {
+    throw new Error('Failed to get canvas context')
+  }
+
+  ctx.imageSmoothingEnabled = false
+  ctx.translate(sourceCanvas.width, 0)
+  ctx.scale(-1, 1)
+  ctx.drawImage(sourceCanvas, 0, 0)
+
+  return flippedCanvas
+}
+
 export function exportCanvasAsPNG(canvas: HTMLCanvasElement): string {
   // Export as PNG with maximum quality
   // PNG is lossless, so quality parameter doesn't affect it

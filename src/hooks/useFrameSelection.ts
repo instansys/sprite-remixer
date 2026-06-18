@@ -28,7 +28,7 @@ export function useFrameSelection(sourceImages: SourceImage[]) {
           y: row,
           width: source.cols,
           height: source.rows,
-          selected: false,
+          selected: true,
           sourceIndex
         })
         globalIndex++

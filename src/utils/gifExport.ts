@@ -1,7 +1,12 @@
 import { GIFEncoder, quantize, applyPalette } from 'gifenc'
 import type { FrameData, SourceImage } from '../types'
 import type { BackgroundColorSource } from '../imageProcessing'
-import { scaleImageNearestNeighbor, scaleImageWithPixelSnap, removeBackgroundFromImage } from '../imageProcessing'
+import {
+  scaleImageNearestNeighbor,
+  scaleImageWithPixelSnap,
+  removeBackgroundFromImage,
+  flipCanvasHorizontal
+} from '../imageProcessing'
 import { buildStablePixelSnapTargets, extractFrameCanvas } from './pixelSnapTargets'
 
 interface GifExportOptions {
@@ -16,6 +21,7 @@ interface GifExportOptions {
   bgColorSource: BackgroundColorSource
   fillInterior: boolean
   pixelPerfectResize: boolean
+  flipHorizontal: boolean
   onProgress?: (current: number, total: number) => void
 }
 
@@ -32,6 +38,7 @@ export async function exportAnimatedGif(options: GifExportOptions): Promise<stri
     bgColorSource,
     fillInterior,
     pixelPerfectResize,
+    flipHorizontal,
     onProgress
   } = options
 
@@ -70,7 +77,7 @@ export async function exportAnimatedGif(options: GifExportOptions): Promise<stri
     const tempCanvas = extractFrameCanvas(sourceImg, source, frame)
     if (!tempCanvas) continue
 
-    const scaledCanvas = pixelPerfectResize
+    let scaledCanvas = pixelPerfectResize
       ? scaleImageWithPixelSnap(tempCanvas, targetWidth, targetHeight, pixelSnapTargets[frame.sourceIndex])
       : scaleImageNearestNeighbor(tempCanvas, targetWidth, targetHeight)
     const scaledCtx = scaledCanvas.getContext('2d')
@@ -91,8 +98,14 @@ export async function exportAnimatedGif(options: GifExportOptions): Promise<stri
       scaledCtx.putImageData(processedData, 0, 0)
     }
 
+    if (flipHorizontal) {
+      scaledCanvas = flipCanvasHorizontal(scaledCanvas)
+    }
+
     // Get pixel data for GIF encoding
-    const imageData = scaledCtx.getImageData(0, 0, targetWidth, targetHeight)
+    const outputCtx = scaledCanvas.getContext('2d')
+    if (!outputCtx) continue
+    const imageData = outputCtx.getImageData(0, 0, targetWidth, targetHeight)
     const { data } = imageData
 
     // Quantize and encode frame

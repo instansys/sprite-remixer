@@ -34,6 +34,7 @@ export function getDefaultSettings(): AppSettings {
     targetWidth: DEFAULT_SETTINGS.targetWidth,
     targetHeight: DEFAULT_SETTINGS.targetHeight,
     pixelPerfectResize: DEFAULT_SETTINGS.pixelPerfectResize,
+    flipHorizontal: DEFAULT_SETTINGS.flipHorizontal,
     fps: DEFAULT_SETTINGS.fps
   }
 }
