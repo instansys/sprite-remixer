@@ -2,3 +2,5 @@ export { isCanvasEmpty, extractVideoFrames, extractGifFrames, createSpriteSheet 
 export { processSprites, downloadImage } from './spriteProcessing'
 export { saveSettingsToFile, loadSettingsFromFile, getDefaultSettings } from './settingsManager'
 export { exportAnimatedGif } from './gifExport'
+export { detectSpriteGrid } from './detectGrid'
+export type { DetectedGrid } from './detectGrid'

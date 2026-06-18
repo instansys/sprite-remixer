@@ -23,6 +23,9 @@ export interface SourceImage {
 export interface PendingImage {
   file: File
   imageUrl: string
+  // 自動検出された分割数（ダイアログの初期値に使用、未検出時はundefined）
+  detectedCols?: number
+  detectedRows?: number
 }
 
 export type FrameSamplingQuality = 'low' | 'medium' | 'high' | 'ultra'

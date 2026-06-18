@@ -9,7 +9,7 @@ import {
   Header,
   VideoProgressModal,
   SourceSettingsDialog,
-  FrameSamplingSelector,
+  VideoSamplingDialog,
   OutputSettings,
   BackgroundRemovalSettings,
   FrameGrid,
@@ -25,7 +25,8 @@ import {
   saveSettingsToFile,
   loadSettingsFromFile,
   getDefaultSettings,
-  exportAnimatedGif
+  exportAnimatedGif,
+  detectSpriteGrid
 } from './utils'
 
 function App() {
@@ -66,12 +67,16 @@ function App() {
   // Source dialog state
   const [showSourceDialog, setShowSourceDialog] = useState(false)
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([])
+  // 動画はサンプリング品質を読み込み時に選んでもらうため、抽出前にキューへ積んでダイアログで確認する
+  const [pendingVideos, setPendingVideos] = useState<File[]>([])
   const [dialogCols, setDialogCols] = useState(srcCols)
   const [dialogRows, setDialogRows] = useState(srcRows)
   const [isDialogProcessing, setIsDialogProcessing] = useState(false)
 
   // Current pending image (first in queue)
   const pendingImage = pendingImages.length > 0 ? pendingImages[0] : null
+  // Current pending video (first in queue)
+  const pendingVideo = pendingVideos.length > 0 ? pendingVideos[0] : null
 
   // Refs
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -123,7 +128,8 @@ function App() {
       const file = files[i]
 
       if (file.type.startsWith('video/')) {
-        await handleVideoUpload(file)
+        // 抽出はサンプリング品質をダイアログで選んでから行う
+        setPendingVideos(prev => [...prev, file])
       } else if (file.type === 'image/gif') {
         await handleGifUpload(file)
       } else {
@@ -139,13 +145,21 @@ function App() {
   const handleImageUpload = (file: File): Promise<void> => {
     return new Promise((resolve) => {
       const reader = new FileReader()
-      reader.onload = (event) => {
+      reader.onload = async (event) => {
         const imageUrl = event.target?.result as string
-        setPendingImages(prev => [...prev, { file, imageUrl }])
+        // n×m分割を自動検出してダイアログの初期値に使う（失敗時はnull）
+        const detected = await detectSpriteGrid(imageUrl).catch(() => null)
+        const pending: PendingImage = {
+          file,
+          imageUrl,
+          detectedCols: detected?.cols,
+          detectedRows: detected?.rows
+        }
+        setPendingImages(prev => [...prev, pending])
         // Only set dialog settings and show dialog for the first image in queue
         if (!showSourceDialog) {
-          setDialogCols(srcCols)
-          setDialogRows(srcRows)
+          setDialogCols(detected?.cols ?? srcCols)
+          setDialogRows(detected?.rows ?? srcRows)
           setShowSourceDialog(true)
         }
         resolve()
@@ -247,9 +261,9 @@ function App() {
             if (remaining.length === 0) {
               setShowSourceDialog(false)
             } else {
-              // Reset dialog settings for next image
-              setDialogCols(srcCols)
-              setDialogRows(srcRows)
+              // Reset dialog settings for next image (use its detected grid if available)
+              setDialogCols(remaining[0].detectedCols ?? srcCols)
+              setDialogRows(remaining[0].detectedRows ?? srcRows)
             }
             return remaining
           })
@@ -266,12 +280,25 @@ function App() {
       if (remaining.length === 0) {
         setShowSourceDialog(false)
       } else {
-        // Reset dialog settings for next image
-        setDialogCols(srcCols)
-        setDialogRows(srcRows)
+        // Reset dialog settings for next image (use its detected grid if available)
+        setDialogCols(remaining[0].detectedCols ?? srcCols)
+        setDialogRows(remaining[0].detectedRows ?? srcRows)
       }
       return remaining
     })
+  }
+
+  // Video sampling dialog handling
+  const confirmVideoSampling = async () => {
+    const file = pendingVideos[0]
+    if (!file) return
+    // キューから外してダイアログを閉じ、抽出は進捗モーダルを出しながら実行する
+    setPendingVideos(prev => prev.slice(1))
+    await handleVideoUpload(file)
+  }
+
+  const cancelVideoSampling = () => {
+    setPendingVideos(prev => prev.slice(1))
   }
 
   // Process sprites
@@ -395,7 +422,18 @@ function App() {
       {isProcessingVideo && <VideoProgressModal progress={videoProgress} />}
       {isEncodingGif && <VideoProgressModal progress={gifProgress} />}
 
-      {showSourceDialog && pendingImage && (
+      {pendingVideo && !isProcessingVideo && (
+        <VideoSamplingDialog
+          fileName={pendingVideo.name}
+          quality={frameSamplingQuality}
+          pendingCount={pendingVideos.length}
+          onChange={setFrameSamplingQuality}
+          onConfirm={confirmVideoSampling}
+          onCancel={cancelVideoSampling}
+        />
+      )}
+
+      {showSourceDialog && pendingImage && !pendingVideo && (
         <SourceSettingsDialog
           pendingImage={pendingImage}
           dialogCols={dialogCols}
@@ -421,12 +459,6 @@ function App() {
               {isProcessingVideo ? '⏳ 処理中...' : '📁 ファイルを追加'}
             </button>
           </div>
-
-          <FrameSamplingSelector
-            value={frameSamplingQuality}
-            onChange={setFrameSamplingQuality}
-            disabled={isProcessingVideo}
-          />
 
           <div className="controls">
             <OutputSettings
