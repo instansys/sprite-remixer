@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { SourceImage } from '../types'
 
 export interface SourceThumbnail {
@@ -60,6 +60,7 @@ function createThumbnail(img: HTMLImageElement): Promise<SourceThumbnail | null>
  */
 export function useSourceThumbnails(sourceImages: SourceImage[]): Map<string, SourceThumbnail> {
   const [thumbnails, setThumbnails] = useState<Map<string, SourceThumbnail>>(new Map())
+  const thumbnailsRef = useRef<Map<string, SourceThumbnail>>(new Map())
 
   useEffect(() => {
     let cancelled = false
@@ -67,14 +68,13 @@ export function useSourceThumbnails(sourceImages: SourceImage[]): Map<string, So
     const run = async () => {
       // 既存のサムネイルはimageUrlが同じ限り使い回す（cols/rows変更では再生成しない）
       const next = new Map<string, SourceThumbnail>()
-      const reused = new Set<string>()
+      const current = thumbnailsRef.current
 
       for (const source of sourceImages) {
-        const existing = thumbnails.get(source.id)
+        const existing = current.get(source.id)
         if (existing && existing.url) {
           // imageUrlは変わらない前提（ソースのシート画像は固定）なので使い回す
           next.set(source.id, existing)
-          reused.add(source.id)
           continue
         }
         try {
@@ -94,10 +94,11 @@ export function useSourceThumbnails(sourceImages: SourceImage[]): Map<string, So
       if (cancelled) return
 
       // 削除されたソースのobjectURLを解放
-      for (const [id, thumb] of thumbnails) {
+      for (const [id, thumb] of current) {
         if (!next.has(id)) URL.revokeObjectURL(thumb.url)
       }
 
+      thumbnailsRef.current = next
       setThumbnails(next)
     }
 
@@ -106,16 +107,14 @@ export function useSourceThumbnails(sourceImages: SourceImage[]): Map<string, So
     return () => {
       cancelled = true
     }
-    // sourceImagesの構成（id/imageUrl）が変わったときのみ再実行
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceImages])
 
   // アンマウント時に全objectURLを解放
   useEffect(() => {
     return () => {
-      for (const [, thumb] of thumbnails) URL.revokeObjectURL(thumb.url)
+      for (const [, thumb] of thumbnailsRef.current) URL.revokeObjectURL(thumb.url)
+      thumbnailsRef.current = new Map()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return thumbnails

@@ -55,6 +55,22 @@ function loadImageSize(src: string): Promise<{ width: number; height: number }> 
   })
 }
 
+function sameRecommendations(
+  a: ResolutionRecommendation[],
+  b: ResolutionRecommendation[]
+): boolean {
+  return a.length === b.length && a.every((item, index) => {
+    const other = b[index]
+    return other &&
+      item.label === other.label &&
+      item.width === other.width &&
+      item.height === other.height &&
+      item.scale === other.scale &&
+      item.logicalWidth === other.logicalWidth &&
+      item.logicalHeight === other.logicalHeight
+  })
+}
+
 function App() {
   // Settings with localStorage persistence
   const [srcCols, setSrcCols] = useLocalStorage(STORAGE_KEYS.srcCols, DEFAULT_SETTINGS.srcCols)
@@ -158,7 +174,7 @@ function App() {
       const source = frame ? sourceImages[frame.sourceIndex] : null
 
       if (!frame || !source) {
-        setResolutionRecommendations([])
+        setResolutionRecommendations(prev => prev.length === 0 ? prev : [])
         return
       }
 
@@ -184,7 +200,7 @@ function App() {
         })
 
         if (!ctx) {
-          setResolutionRecommendations([])
+          setResolutionRecommendations(prev => prev.length === 0 ? prev : [])
           return
         }
 
@@ -215,10 +231,16 @@ function App() {
               logicalHeight: stableTarget.logicalHeight
             }))
           : getPixelSnapResolutionRecommendations(canvas)
-        if (!cancelled) setResolutionRecommendations(recommendations)
+        if (!cancelled) {
+          setResolutionRecommendations(prev => (
+            sameRecommendations(prev, recommendations) ? prev : recommendations
+          ))
+        }
       } catch (error) {
         console.error('Failed to calculate pixel snap recommendations:', error)
-        if (!cancelled) setResolutionRecommendations([])
+        if (!cancelled) {
+          setResolutionRecommendations(prev => prev.length === 0 ? prev : [])
+        }
       }
     }
 

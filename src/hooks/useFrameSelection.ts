@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import type { FrameData, SourceImage } from '../types'
 
 export function useFrameSelection(sourceImages: SourceImage[]) {
@@ -61,7 +61,7 @@ export function useFrameSelection(sourceImages: SourceImage[]) {
     setFrames(prev => prev.map(frame => ({ ...frame, selected: false })))
   }, [])
 
-  const selectedFrames = frames.filter(f => f.selected)
+  const selectedFrames = useMemo(() => frames.filter(f => f.selected), [frames])
 
   return {
     frames,
