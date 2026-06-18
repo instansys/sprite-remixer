@@ -1,5 +1,7 @@
 import type { FrameSamplingQuality, OutputFormat, SamplingConfig } from './types'
 
+export const PIXEL_SNAP_RECOMMENDATION_SCALES = [1, 2, 4, 8] as const
+
 export const SAMPLING_CONFIGS: Record<FrameSamplingQuality, SamplingConfig> = {
   low: { label: '低 (軽い)', sampleInterval: 15, maxFrames: 30 },
   medium: { label: '中 (標準)', sampleInterval: 10, maxFrames: 50 },

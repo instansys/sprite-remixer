@@ -1,4 +1,5 @@
 import type { OutputFormat } from './types'
+import { PIXEL_SNAP_RECOMMENDATION_SCALES } from './constants'
 
 export interface ImageProcessingOptions {
   removeBackground?: boolean
@@ -1664,7 +1665,7 @@ export function getPixelSnapResolutionRecommendations(
   sourceCanvas: HTMLCanvasElement
 ): ResolutionRecommendation[] {
   const analysis = analyzePixelSnapCanvas(sourceCanvas)
-  return [1, 2, 4].map(scale => ({
+  return PIXEL_SNAP_RECOMMENDATION_SCALES.map(scale => ({
     label: `${scale}x`,
     width: Math.max(8, analysis.logicalWidth * scale),
     height: Math.max(8, analysis.logicalHeight * scale),
