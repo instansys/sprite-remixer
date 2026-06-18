@@ -18,6 +18,9 @@ export interface SourceImage {
   cols: number
   rows: number
   sourceType: SourceType
+  // 元シート画像の自然寸法（1フレームあたりの出力pxの導出に使用）
+  naturalWidth?: number
+  naturalHeight?: number
 }
 
 export interface PendingImage {

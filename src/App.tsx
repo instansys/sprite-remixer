@@ -29,6 +29,16 @@ import {
   detectSpriteGrid
 } from './utils'
 
+// 画像の自然寸法を取得する
+function loadImageSize(src: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight })
+    img.onerror = reject
+    img.src = src
+  })
+}
+
 function App() {
   // Settings with localStorage persistence
   const [srcCols, setSrcCols] = useLocalStorage(STORAGE_KEYS.srcCols, DEFAULT_SETTINGS.srcCols)
@@ -230,6 +240,26 @@ function App() {
     }
   }
 
+  // n×m と元寸法から1フレームの出力px（幅・高さ）を求めて出力設定に反映する
+  const applyFrameOutputSize = (
+    naturalWidth: number,
+    naturalHeight: number,
+    cols: number,
+    rows: number
+  ) => {
+    if (naturalWidth > 0 && cols > 0) setTargetWidth(Math.max(1, Math.round(naturalWidth / cols)))
+    if (naturalHeight > 0 && rows > 0) setTargetHeight(Math.max(1, Math.round(naturalHeight / rows)))
+  }
+
+  // フレーム選択側で分割数が変わったら、出力サイズも追従させる
+  const handleUpdateSourceSettings = (sourceId: string, cols: number, rows: number) => {
+    updateSourceSettings(sourceId, cols, rows)
+    const source = sourceImages.find(s => s.id === sourceId)
+    if (source?.naturalWidth && source?.naturalHeight) {
+      applyFrameOutputSize(source.naturalWidth, source.naturalHeight, cols, rows)
+    }
+  }
+
   // Source dialog handling
   const confirmSourceSettings = async () => {
     if (!pendingImage) return
@@ -237,18 +267,27 @@ function App() {
     setIsDialogProcessing(true)
     await new Promise(resolve => setTimeout(resolve, 0))
 
+    // 元シートの自然寸法を取得し、1フレームあたりの出力pxを導出する
+    const { width: naturalWidth, height: naturalHeight } = await loadImageSize(
+      pendingImage.imageUrl
+    ).catch(() => ({ width: 0, height: 0 }))
+
     const newSource: SourceImage = {
       id: generateSourceId(),
       name: pendingImage.file.name,
       imageUrl: pendingImage.imageUrl,
       cols: dialogCols,
       rows: dialogRows,
-      sourceType: 'image'
+      sourceType: 'image',
+      naturalWidth,
+      naturalHeight
     }
 
     addSource(newSource)
     setSrcCols(dialogCols)
     setSrcRows(dialogRows)
+    // n×m から決まる1フレームの出力サイズで出力設定を上書き
+    applyFrameOutputSize(naturalWidth, naturalHeight, dialogCols, dialogRows)
 
     await new Promise(resolve => {
       requestAnimationFrame(() => {
@@ -505,7 +544,7 @@ function App() {
             onToggleFrame={toggleFrame}
             onSelectAll={selectAll}
             onDeselectAll={deselectAll}
-            onUpdateSourceSettings={updateSourceSettings}
+            onUpdateSourceSettings={handleUpdateSourceSettings}
             onRemoveSource={removeSource}
           />
 
