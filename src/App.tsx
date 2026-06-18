@@ -11,6 +11,7 @@ import type {
 } from './types'
 import type { BackgroundColorSource } from './imageProcessing'
 import { getPixelSnapResolutionRecommendations } from './imageProcessing'
+import { buildStablePixelSnapTargetForSource } from './utils/pixelSnapTargets'
 import { STORAGE_KEYS, DEFAULT_SETTINGS } from './constants'
 import {
   useLocalStorage,
@@ -200,7 +201,20 @@ function App() {
           frameHeight
         )
 
-        const recommendations = getPixelSnapResolutionRecommendations(canvas)
+        const sourceFrames = selectedFrames.some(selectedFrame => selectedFrame.sourceIndex === frame.sourceIndex)
+          ? selectedFrames.filter(selectedFrame => selectedFrame.sourceIndex === frame.sourceIndex)
+          : frames.filter(candidateFrame => candidateFrame.sourceIndex === frame.sourceIndex)
+        const stableTarget = buildStablePixelSnapTargetForSource(source, sourceFrames, img)
+        const recommendations = stableTarget
+          ? [1, 2, 4].map(scale => ({
+              label: `${scale}x`,
+              width: Math.max(8, stableTarget.logicalWidth * scale),
+              height: Math.max(8, stableTarget.logicalHeight * scale),
+              scale,
+              logicalWidth: stableTarget.logicalWidth,
+              logicalHeight: stableTarget.logicalHeight
+            }))
+          : getPixelSnapResolutionRecommendations(canvas)
         if (!cancelled) setResolutionRecommendations(recommendations)
       } catch (error) {
         console.error('Failed to calculate pixel snap recommendations:', error)

@@ -6,6 +6,7 @@ import {
   removeBackgroundFromImage,
   exportCanvas
 } from '../imageProcessing'
+import { buildStablePixelSnapTargets, extractFrameCanvas } from './pixelSnapTargets'
 
 interface ProcessSpritesOptions {
   sourceImages: SourceImage[]
@@ -74,6 +75,10 @@ export async function processSprites(options: ProcessSpritesOptions): Promise<st
   ctx.imageSmoothingEnabled = false
   ctx.imageSmoothingQuality = 'low'
 
+  const pixelSnapTargets = pixelPerfectResize
+    ? buildStablePixelSnapTargets(sourceImages, selectedFrames, loadedImages)
+    : {}
+
   selectedFrames.forEach((frame, idx) => {
     const destCol = idx % outputCols
     const destRow = Math.floor(idx / outputCols)
@@ -82,38 +87,11 @@ export async function processSprites(options: ProcessSpritesOptions): Promise<st
     const source = sourceImages[frame.sourceIndex]
     if (!sourceImg || !source) return
 
-    const frameWidth = sourceImg.width / source.cols
-    const frameHeight = sourceImg.height / source.rows
-    const srcX = frame.x * frameWidth
-    const srcY = frame.y * frameHeight
-
-    const tempCanvas = document.createElement('canvas')
-    tempCanvas.width = frameWidth
-    tempCanvas.height = frameHeight
-    const tempCtx = tempCanvas.getContext('2d', {
-      alpha: true,
-      colorSpace: 'srgb',
-      willReadFrequently: true
-    })
-    if (!tempCtx) return
-
-    tempCtx.imageSmoothingEnabled = false
-    tempCtx.imageSmoothingQuality = 'low'
-
-    tempCtx.drawImage(
-      sourceImg,
-      srcX,
-      srcY,
-      frameWidth,
-      frameHeight,
-      0,
-      0,
-      frameWidth,
-      frameHeight
-    )
+    const tempCanvas = extractFrameCanvas(sourceImg, source, frame)
+    if (!tempCanvas) return
 
     const scaledCanvas = pixelPerfectResize
-      ? scaleImageWithPixelSnap(tempCanvas, targetWidth, targetHeight)
+      ? scaleImageWithPixelSnap(tempCanvas, targetWidth, targetHeight, pixelSnapTargets[frame.sourceIndex])
       : scaleImageNearestNeighbor(tempCanvas, targetWidth, targetHeight)
     const scaledCtx = scaledCanvas.getContext('2d')
     if (!scaledCtx) return

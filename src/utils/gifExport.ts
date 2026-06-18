@@ -2,6 +2,7 @@ import { GIFEncoder, quantize, applyPalette } from 'gifenc'
 import type { FrameData, SourceImage } from '../types'
 import type { BackgroundColorSource } from '../imageProcessing'
 import { scaleImageNearestNeighbor, scaleImageWithPixelSnap, removeBackgroundFromImage } from '../imageProcessing'
+import { buildStablePixelSnapTargets, extractFrameCanvas } from './pixelSnapTargets'
 
 interface GifExportOptions {
   sourceImages: SourceImage[]
@@ -56,6 +57,9 @@ export async function exportAnimatedGif(options: GifExportOptions): Promise<stri
   const gif = GIFEncoder()
   const delay = Math.round(1000 / fps)
   const total = selectedFrames.length
+  const pixelSnapTargets = pixelPerfectResize
+    ? buildStablePixelSnapTargets(sourceImages, selectedFrames, loadedImages)
+    : {}
 
   for (let i = 0; i < total; i++) {
     const frame = selectedFrames[i]
@@ -63,28 +67,11 @@ export async function exportAnimatedGif(options: GifExportOptions): Promise<stri
     const source = sourceImages[frame.sourceIndex]
     if (!sourceImg || !source) continue
 
-    // Extract frame from source (same logic as spriteProcessing.ts)
-    const frameWidth = sourceImg.width / source.cols
-    const frameHeight = sourceImg.height / source.rows
-    const srcX = frame.x * frameWidth
-    const srcY = frame.y * frameHeight
-
-    const tempCanvas = document.createElement('canvas')
-    tempCanvas.width = frameWidth
-    tempCanvas.height = frameHeight
-    const tempCtx = tempCanvas.getContext('2d', {
-      alpha: true,
-      colorSpace: 'srgb',
-      willReadFrequently: true
-    })
-    if (!tempCtx) continue
-
-    tempCtx.imageSmoothingEnabled = false
-    tempCtx.imageSmoothingQuality = 'low'
-    tempCtx.drawImage(sourceImg, srcX, srcY, frameWidth, frameHeight, 0, 0, frameWidth, frameHeight)
+    const tempCanvas = extractFrameCanvas(sourceImg, source, frame)
+    if (!tempCanvas) continue
 
     const scaledCanvas = pixelPerfectResize
-      ? scaleImageWithPixelSnap(tempCanvas, targetWidth, targetHeight)
+      ? scaleImageWithPixelSnap(tempCanvas, targetWidth, targetHeight, pixelSnapTargets[frame.sourceIndex])
       : scaleImageNearestNeighbor(tempCanvas, targetWidth, targetHeight)
     const scaledCtx = scaledCanvas.getContext('2d')
     if (!scaledCtx) continue

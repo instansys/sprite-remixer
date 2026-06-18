@@ -25,6 +25,11 @@ export interface PixelSnapAnalysis {
   detected: boolean
 }
 
+export interface PixelSnapTarget {
+  logicalWidth: number
+  logicalHeight: number
+}
+
 export interface ResolutionRecommendation {
   label: string
   width: number
@@ -108,6 +113,181 @@ function deltaE(r1: number, g1: number, b1: number, r2: number, g2: number, b2: 
 export const BackgroundColorSources = ['auto', 'top-left', 'top-right', 'bottom-left', 'bottom-right'] as const
 export type BackgroundColorSource = typeof BackgroundColorSources[number]
 
+const BACKGROUND_CLUSTER_DISTANCE = 24
+
+interface BackgroundSample {
+  r: number
+  g: number
+  b: number
+  alpha: number
+  sideMask: number
+  cornerMask: number
+  edgeDistance: number
+}
+
+interface BackgroundCluster {
+  r: number
+  g: number
+  b: number
+  weight: number
+  outerWeight: number
+  sideMask: number
+  cornerMask: number
+}
+
+function countBits(value: number): number {
+  let count = 0
+  let current = value
+  while (current > 0) {
+    count += current & 1
+    current >>= 1
+  }
+  return count
+}
+
+function getCornerMask(x: number, y: number, width: number, height: number, radius: number): number {
+  let mask = 0
+  if (x < radius && y < radius) mask |= 1
+  if (x >= width - radius && y < radius) mask |= 2
+  if (x < radius && y >= height - radius) mask |= 4
+  if (x >= width - radius && y >= height - radius) mask |= 8
+  return mask
+}
+
+function collectBackgroundSamples(imageData: ImageData, width: number, height: number): BackgroundSample[] {
+  const samplesByPixel = new Map<number, BackgroundSample>()
+  const minDimension = Math.min(width, height)
+  const edgeDepth = Math.max(1, Math.min(6, Math.floor(minDimension / 12)))
+  const cornerRadius = Math.max(1, Math.min(4, Math.floor(minDimension / 16)))
+
+  const recordSample = (x: number, y: number, sideMask: number, edgeDistance: number) => {
+    const pixelKey = y * width + x
+    const idx = pixelKey * 4
+    const alpha = imageData.data[idx + 3]
+    if (alpha <= 8) return
+
+    const existing = samplesByPixel.get(pixelKey)
+    if (existing) {
+      existing.sideMask |= sideMask
+      existing.cornerMask |= getCornerMask(x, y, width, height, cornerRadius)
+      existing.edgeDistance = Math.min(existing.edgeDistance, edgeDistance)
+      return
+    }
+
+    samplesByPixel.set(pixelKey, {
+      r: imageData.data[idx],
+      g: imageData.data[idx + 1],
+      b: imageData.data[idx + 2],
+      alpha,
+      sideMask,
+      cornerMask: getCornerMask(x, y, width, height, cornerRadius),
+      edgeDistance
+    })
+  }
+
+  for (let depth = 0; depth < edgeDepth; depth++) {
+    const topY = depth
+    const bottomY = height - 1 - depth
+    for (let x = 0; x < width; x++) {
+      recordSample(x, topY, 1, depth)
+      if (bottomY !== topY) recordSample(x, bottomY, 4, depth)
+    }
+
+    const leftX = depth
+    const rightX = width - 1 - depth
+    for (let y = 0; y < height; y++) {
+      recordSample(leftX, y, 8, depth)
+      if (rightX !== leftX) recordSample(rightX, y, 2, depth)
+    }
+  }
+
+  return Array.from(samplesByPixel.values())
+}
+
+function findNearestBackgroundCluster(
+  clusters: BackgroundCluster[],
+  sample: BackgroundSample
+): BackgroundCluster | null {
+  const maxDistance = BACKGROUND_CLUSTER_DISTANCE * BACKGROUND_CLUSTER_DISTANCE
+  let bestCluster: BackgroundCluster | null = null
+  let bestDistance = Number.POSITIVE_INFINITY
+
+  for (const cluster of clusters) {
+    const dr = sample.r - cluster.r
+    const dg = sample.g - cluster.g
+    const db = sample.b - cluster.b
+    const distance = dr * dr + dg * dg + db * db
+
+    if (distance <= maxDistance && distance < bestDistance) {
+      bestDistance = distance
+      bestCluster = cluster
+    }
+  }
+
+  return bestCluster
+}
+
+function detectAutoBackgroundColor(imageData: ImageData, width: number, height: number): number[] {
+  const samples = collectBackgroundSamples(imageData, width, height)
+  if (samples.length === 0) return [0, 0, 0]
+
+  const clusters: BackgroundCluster[] = []
+
+  for (const sample of samples) {
+    const alphaWeight = sample.alpha / 255
+    const edgeWeight = sample.edgeDistance === 0 ? 2 : 1
+    const cornerWeight = sample.cornerMask === 0 ? 1 : 1.5
+    const sampleWeight = alphaWeight * edgeWeight * cornerWeight
+    const cluster = findNearestBackgroundCluster(clusters, sample)
+
+    if (!cluster) {
+      clusters.push({
+        r: sample.r,
+        g: sample.g,
+        b: sample.b,
+        weight: sampleWeight,
+        outerWeight: sample.edgeDistance === 0 ? sampleWeight : 0,
+        sideMask: sample.sideMask,
+        cornerMask: sample.cornerMask
+      })
+      continue
+    }
+
+    const nextWeight = cluster.weight + sampleWeight
+    cluster.r = (cluster.r * cluster.weight + sample.r * sampleWeight) / nextWeight
+    cluster.g = (cluster.g * cluster.weight + sample.g * sampleWeight) / nextWeight
+    cluster.b = (cluster.b * cluster.weight + sample.b * sampleWeight) / nextWeight
+    cluster.weight = nextWeight
+    cluster.outerWeight += sample.edgeDistance === 0 ? sampleWeight : 0
+    cluster.sideMask |= sample.sideMask
+    cluster.cornerMask |= sample.cornerMask
+  }
+
+  let bestCluster = clusters[0]
+  let bestScore = -1
+  const cornerEvidenceWeight = Math.max(12, samples.length * 0.015)
+
+  for (const cluster of clusters) {
+    const sideCoverage = countBits(cluster.sideMask)
+    const cornerCoverage = countBits(cluster.cornerMask)
+    const score =
+      cluster.weight * (1 + sideCoverage * 0.2) +
+      cluster.outerWeight * 0.1 +
+      cornerCoverage * cornerEvidenceWeight
+
+    if (score > bestScore) {
+      bestScore = score
+      bestCluster = cluster
+    }
+  }
+
+  return [
+    Math.round(bestCluster.r),
+    Math.round(bestCluster.g),
+    Math.round(bestCluster.b)
+  ]
+}
+
 /**
  * 指定した角のピクセル色を取得
  */
@@ -143,45 +323,8 @@ export function detectBackgroundColor(
     return getCornerColor(imageData, width, height, source)
   }
 
-  // 自動検出: エッジ全体から最も多い色を検出
-  const edgeColors: Map<string, number> = new Map()
-
-  // Top and bottom edges
-  for (let x = 0; x < width; x++) {
-    const topIdx = x * 4
-    const bottomIdx = ((height - 1) * width + x) * 4
-
-    const topColor = `${imageData.data[topIdx]},${imageData.data[topIdx + 1]},${imageData.data[topIdx + 2]}`
-    const bottomColor = `${imageData.data[bottomIdx]},${imageData.data[bottomIdx + 1]},${imageData.data[bottomIdx + 2]}`
-
-    edgeColors.set(topColor, (edgeColors.get(topColor) || 0) + 1)
-    edgeColors.set(bottomColor, (edgeColors.get(bottomColor) || 0) + 1)
-  }
-
-  // Left and right edges
-  for (let y = 0; y < height; y++) {
-    const leftIdx = y * width * 4
-    const rightIdx = (y * width + width - 1) * 4
-
-    const leftColor = `${imageData.data[leftIdx]},${imageData.data[leftIdx + 1]},${imageData.data[leftIdx + 2]}`
-    const rightColor = `${imageData.data[rightIdx]},${imageData.data[rightIdx + 1]},${imageData.data[rightIdx + 2]}`
-
-    edgeColors.set(leftColor, (edgeColors.get(leftColor) || 0) + 1)
-    edgeColors.set(rightColor, (edgeColors.get(rightColor) || 0) + 1)
-  }
-
-  // Find most common edge color
-  let maxCount = 0
-  let bgColor = '0,0,0'
-
-  edgeColors.forEach((count, color) => {
-    if (count > maxCount) {
-      maxCount = count
-      bgColor = color
-    }
-  })
-
-  return bgColor.split(',').map(c => parseInt(c))
+  // 自動検出: 外周の完全一致ではなく、外周数pxの近似色クラスタと分布で背景色を推定する。
+  return detectAutoBackgroundColor(imageData, width, height)
 }
 
 /**
@@ -735,6 +878,25 @@ function snapUniformCuts(
   return sanitizeCuts(cuts, limit)
 }
 
+function buildUniformCellCuts(limit: number, cellCount: number): number[] {
+  if (limit <= 1) return [0, limit]
+
+  const desiredCells = Math.min(limit, Math.max(1, Math.round(cellCount)))
+  const cuts = [0]
+
+  for (let index = 1; index < desiredCells; index++) {
+    const previous = cuts[cuts.length - 1]
+    const remainingCuts = desiredCells - index
+    const minIndex = previous + 1
+    const maxIndex = limit - remainingCuts
+    const next = Math.round((index * limit) / desiredCells)
+    cuts.push(Math.max(minIndex, Math.min(maxIndex, next)))
+  }
+
+  cuts.push(limit)
+  return cuts
+}
+
 function stabilizeCuts(
   profile: number[],
   cuts: number[],
@@ -766,7 +928,26 @@ function stabilizeCuts(
   return snapUniformCuts(profile, limit, targetStep, config, minRequired)
 }
 
-function getGridCuts(imageData: ImageData): { cols: number[]; rows: number[]; analysis: PixelSnapAnalysis } {
+function getGridCuts(
+  imageData: ImageData,
+  target?: PixelSnapTarget
+): { cols: number[]; rows: number[]; analysis: PixelSnapAnalysis } {
+  if (target) {
+    const logicalWidth = Math.max(1, Math.min(imageData.width, Math.round(target.logicalWidth)))
+    const logicalHeight = Math.max(1, Math.min(imageData.height, Math.round(target.logicalHeight)))
+    return {
+      cols: buildUniformCellCuts(imageData.width, logicalWidth),
+      rows: buildUniformCellCuts(imageData.height, logicalHeight),
+      analysis: {
+        logicalWidth,
+        logicalHeight,
+        pixelSizeX: imageData.width / logicalWidth,
+        pixelSizeY: imageData.height / logicalHeight,
+        detected: true
+      }
+    }
+  }
+
   const quantized = buildQuantizedImageData(imageData)
   const profiles = computeProfiles(quantized)
   const stepX = estimateStepSize(profiles.cols, PIXEL_SNAP_CONFIG)
@@ -905,7 +1086,8 @@ export function getPixelSnapResolutionRecommendations(
 export function scaleImageWithPixelSnap(
   sourceCanvas: HTMLCanvasElement,
   targetWidth: number,
-  targetHeight: number
+  targetHeight: number,
+  pixelSnapTarget?: PixelSnapTarget
 ): HTMLCanvasElement {
   const ctx = sourceCanvas.getContext('2d', {
     alpha: true,
@@ -918,7 +1100,7 @@ export function scaleImageWithPixelSnap(
   }
 
   const imageData = ctx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height)
-  const { cols, rows } = getGridCuts(imageData)
+  const { cols, rows } = getGridCuts(imageData, pixelSnapTarget)
   const snappedCanvas = resampleToPixelGrid(imageData, cols, rows)
 
   return scaleImageNearestNeighbor(snappedCanvas, targetWidth, targetHeight)
