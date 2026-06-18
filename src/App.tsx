@@ -91,6 +91,10 @@ function App() {
     DEFAULT_SETTINGS.flipHorizontal
   )
   const [fps, setFps] = useLocalStorage(STORAGE_KEYS.fps, DEFAULT_SETTINGS.fps)
+  const [previewBgColor, setPreviewBgColor] = useLocalStorageString(
+    STORAGE_KEYS.previewBgColor,
+    DEFAULT_SETTINGS.previewBgColor
+  )
   const [frameSamplingQuality, setFrameSamplingQuality] = useLocalStorageString<FrameSamplingQuality>(
     STORAGE_KEYS.frameSamplingQuality,
     DEFAULT_SETTINGS.frameSamplingQuality
@@ -702,10 +706,12 @@ function App() {
               outputFormat={outputFormat}
               isEncodingGif={isEncodingGif}
               animationCanvasRef={animationCanvasRef}
+              previewBgColor={previewBgColor}
               onDownload={handleDownload}
               onTogglePlayback={togglePlayback}
               onToggleReverse={toggleReverse}
               onFpsChange={setFps}
+              onPreviewBgColorChange={setPreviewBgColor}
             />
           )}
         </div>

@@ -18,7 +18,8 @@ export const STORAGE_KEYS = {
   pixelPerfectResize: 'sprite-remixer-pixel-perfect-resize',
   flipHorizontal: 'sprite-remixer-flip-horizontal',
   fps: 'sprite-remixer-fps',
-  frameSamplingQuality: 'sprite-remixer-frame-sampling-quality'
+  frameSamplingQuality: 'sprite-remixer-frame-sampling-quality',
+  previewBgColor: 'sprite-remixer-preview-bg-color'
 } as const
 
 export const DEFAULT_SETTINGS = {
@@ -31,5 +32,6 @@ export const DEFAULT_SETTINGS = {
   pixelPerfectResize: true,
   flipHorizontal: false,
   fps: 12,
-  frameSamplingQuality: 'medium' as FrameSamplingQuality
+  frameSamplingQuality: 'medium' as FrameSamplingQuality,
+  previewBgColor: '#242424'
 } as const

@@ -770,6 +770,25 @@ h1 {
   image-rendering: crisp-edges;
 }
 
+.preview-bg-color {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.preview-bg-color input[type='color'] {
+  width: 2.5rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: none;
+  cursor: pointer;
+}
+
 .animation-buttons {
   display: flex;
   align-items: center;
