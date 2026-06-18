@@ -114,6 +114,9 @@ export const BackgroundColorSources = ['auto', 'top-left', 'top-right', 'bottom-
 export type BackgroundColorSource = typeof BackgroundColorSources[number]
 
 const BACKGROUND_CLUSTER_DISTANCE = 24
+const MATTE_ALPHA_EPSILON = 1 / 255
+const LOCAL_COLOR_VARIATION_DISTANCE_SQ = 14 * 14
+const FLAT_FOREGROUND_DISTANCE_SQ = 8 * 8
 
 interface BackgroundSample {
   r: number
@@ -154,13 +157,56 @@ function getCornerMask(x: number, y: number, width: number, height: number, radi
   return mask
 }
 
+function getRectCornerMask(
+  x: number,
+  y: number,
+  left: number,
+  top: number,
+  right: number,
+  bottom: number,
+  radius: number
+): number {
+  let mask = 0
+  if (x < left + radius && y < top + radius) mask |= 1
+  if (x > right - radius && y < top + radius) mask |= 2
+  if (x < left + radius && y > bottom - radius) mask |= 4
+  if (x > right - radius && y > bottom - radius) mask |= 8
+  return mask
+}
+
+function getOpaqueBounds(imageData: ImageData, width: number, height: number) {
+  let left = width
+  let top = height
+  let right = -1
+  let bottom = -1
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = (y * width + x) * 4
+      if (imageData.data[idx + 3] <= 8) continue
+      left = Math.min(left, x)
+      top = Math.min(top, y)
+      right = Math.max(right, x)
+      bottom = Math.max(bottom, y)
+    }
+  }
+
+  return right === -1 ? null : { left, top, right, bottom }
+}
+
 function collectBackgroundSamples(imageData: ImageData, width: number, height: number): BackgroundSample[] {
   const samplesByPixel = new Map<number, BackgroundSample>()
   const minDimension = Math.min(width, height)
   const edgeDepth = Math.max(1, Math.min(6, Math.floor(minDimension / 12)))
   const cornerRadius = Math.max(1, Math.min(4, Math.floor(minDimension / 16)))
 
-  const recordSample = (x: number, y: number, sideMask: number, edgeDistance: number) => {
+  const recordSample = (
+    x: number,
+    y: number,
+    sideMask: number,
+    edgeDistance: number,
+    cornerMask = getCornerMask(x, y, width, height, cornerRadius)
+  ) => {
     const pixelKey = y * width + x
     const idx = pixelKey * 4
     const alpha = imageData.data[idx + 3]
@@ -169,7 +215,7 @@ function collectBackgroundSamples(imageData: ImageData, width: number, height: n
     const existing = samplesByPixel.get(pixelKey)
     if (existing) {
       existing.sideMask |= sideMask
-      existing.cornerMask |= getCornerMask(x, y, width, height, cornerRadius)
+      existing.cornerMask |= cornerMask
       existing.edgeDistance = Math.min(existing.edgeDistance, edgeDistance)
       return
     }
@@ -180,24 +226,66 @@ function collectBackgroundSamples(imageData: ImageData, width: number, height: n
       b: imageData.data[idx + 2],
       alpha,
       sideMask,
-      cornerMask: getCornerMask(x, y, width, height, cornerRadius),
+      cornerMask,
       edgeDistance
     })
   }
 
-  for (let depth = 0; depth < edgeDepth; depth++) {
-    const topY = depth
-    const bottomY = height - 1 - depth
-    for (let x = 0; x < width; x++) {
-      recordSample(x, topY, 1, depth)
-      if (bottomY !== topY) recordSample(x, bottomY, 4, depth)
-    }
+  const recordRectEdges = (
+    left: number,
+    top: number,
+    right: number,
+    bottom: number,
+    useRectCorners: boolean
+  ) => {
+    const maxDepth = Math.min(edgeDepth, Math.ceil((right - left + 1) / 2), Math.ceil((bottom - top + 1) / 2))
 
-    const leftX = depth
-    const rightX = width - 1 - depth
-    for (let y = 0; y < height; y++) {
-      recordSample(leftX, y, 8, depth)
-      if (rightX !== leftX) recordSample(rightX, y, 2, depth)
+    for (let depth = 0; depth < maxDepth; depth++) {
+      const topY = top + depth
+      const bottomY = bottom - depth
+      const leftX = left + depth
+      const rightX = right - depth
+      if (leftX > rightX || topY > bottomY) break
+
+      for (let x = leftX; x <= rightX; x++) {
+        const topCorner = useRectCorners
+          ? getRectCornerMask(x, topY, left, top, right, bottom, cornerRadius)
+          : undefined
+        recordSample(x, topY, 1, depth, topCorner)
+
+        if (bottomY !== topY) {
+          const bottomCorner = useRectCorners
+            ? getRectCornerMask(x, bottomY, left, top, right, bottom, cornerRadius)
+            : undefined
+          recordSample(x, bottomY, 4, depth, bottomCorner)
+        }
+      }
+
+      for (let y = topY; y <= bottomY; y++) {
+        const leftCorner = useRectCorners
+          ? getRectCornerMask(leftX, y, left, top, right, bottom, cornerRadius)
+          : undefined
+        recordSample(leftX, y, 8, depth, leftCorner)
+
+        if (rightX !== leftX) {
+          const rightCorner = useRectCorners
+            ? getRectCornerMask(rightX, y, left, top, right, bottom, cornerRadius)
+            : undefined
+          recordSample(rightX, y, 2, depth, rightCorner)
+        }
+      }
+    }
+  }
+
+  recordRectEdges(0, 0, width - 1, height - 1, false)
+
+  if (samplesByPixel.size < Math.max(4, minDimension)) {
+    const bounds = getOpaqueBounds(imageData, width, height)
+    if (
+      bounds &&
+      (bounds.left > 0 || bounds.top > 0 || bounds.right < width - 1 || bounds.bottom < height - 1)
+    ) {
+      recordRectEdges(bounds.left, bounds.top, bounds.right, bounds.bottom, true)
     }
   }
 
@@ -288,10 +376,71 @@ function detectAutoBackgroundColor(imageData: ImageData, width: number, height: 
   ]
 }
 
+type Rgb = [number, number, number]
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function clamp01(value: number): number {
+  return clamp(value, 0, 1)
+}
+
+function clampByte(value: number): number {
+  return Math.round(clamp(value, 0, 255))
+}
+
+function rgbDistanceSquared(a: Rgb, b: Rgb): number {
+  const dr = a[0] - b[0]
+  const dg = a[1] - b[1]
+  const db = a[2] - b[2]
+  return dr * dr + dg * dg + db * db
+}
+
+function pixelRgb(data: Uint8ClampedArray, pixelIndex: number): Rgb {
+  const idx = pixelIndex * 4
+  return [data[idx], data[idx + 1], data[idx + 2]]
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle]
+}
+
 /**
- * 指定した角のピクセル色を取得
+ * 指定した角の背景色を取得する。単一ピクセルではなく小さなパッチの中央値を使い、
+ * 圧縮ノイズや1pxの異物で背景推定がぶれないようにする。
  */
 export function getCornerColor(imageData: ImageData, width: number, height: number, corner: BackgroundColorSource): number[] {
+  const patchSize = Math.max(1, Math.min(8, Math.floor(Math.min(width, height) / 10)))
+  const xStart = corner === 'top-right' || corner === 'bottom-right' ? width - patchSize : 0
+  const yStart = corner === 'bottom-left' || corner === 'bottom-right' ? height - patchSize : 0
+  const rs: number[] = []
+  const gs: number[] = []
+  const bs: number[] = []
+
+  for (let y = yStart; y < yStart + patchSize; y++) {
+    for (let x = xStart; x < xStart + patchSize; x++) {
+      const idx = (y * width + x) * 4
+      if (imageData.data[idx + 3] <= 8) continue
+      rs.push(imageData.data[idx])
+      gs.push(imageData.data[idx + 1])
+      bs.push(imageData.data[idx + 2])
+    }
+  }
+
+  if (rs.length > 0) {
+    return [
+      Math.round(median(rs)),
+      Math.round(median(gs)),
+      Math.round(median(bs))
+    ]
+  }
+
   let idx: number
   switch (corner) {
     case 'top-left':
@@ -389,6 +538,295 @@ export function erodeEdges(
   return result
 }
 
+function getMatteConfig(tolerance: number) {
+  const normalizedTolerance = clamp(tolerance, 0, 255)
+  const noiseAlpha = normalizedTolerance / 255
+  const transparentDeltaE = (normalizedTolerance / 255) * 100
+
+  return {
+    noiseAlpha,
+    transparentDeltaE,
+    maxRefineDistance: Math.max(2, Math.min(6, Math.ceil(normalizedTolerance / 48) + 2)),
+    foregroundSearchRadius: Math.max(3, Math.min(8, Math.ceil(normalizedTolerance / 32) + 3))
+  }
+}
+
+function estimateAlphaFromBackground(rgb: Rgb, bgColor: Rgb): number {
+  let alpha = 0
+
+  for (let channel = 0; channel < 3; channel++) {
+    const background = bgColor[channel]
+    const value = rgb[channel]
+    const difference = value - background
+    if (difference === 0) continue
+
+    const denominator = difference > 0 ? 255 - background : background
+    if (denominator <= 0) {
+      alpha = 1
+    } else {
+      alpha = Math.max(alpha, Math.abs(difference) / denominator)
+    }
+  }
+
+  return clamp01(alpha)
+}
+
+function applyAlphaNoiseFloor(alpha: number, noiseAlpha: number): number {
+  if (alpha <= noiseAlpha) return 0
+  if (alpha >= 1 - MATTE_ALPHA_EPSILON) return 1
+  return alpha
+}
+
+function recoverForegroundRgb(rgb: Rgb, bgColor: Rgb, alpha: number, foregroundHint?: Rgb): Rgb {
+  if (alpha <= MATTE_ALPHA_EPSILON) return [0, 0, 0]
+  if (foregroundHint && alpha < 1 - MATTE_ALPHA_EPSILON) return foregroundHint
+  if (alpha >= 1 - MATTE_ALPHA_EPSILON) return rgb
+
+  const inverseAlpha = 1 - alpha
+  return [
+    clampByte((rgb[0] - inverseAlpha * bgColor[0]) / alpha),
+    clampByte((rgb[1] - inverseAlpha * bgColor[1]) / alpha),
+    clampByte((rgb[2] - inverseAlpha * bgColor[2]) / alpha)
+  ]
+}
+
+function hasLocalColorVariation(
+  imageData: ImageData,
+  width: number,
+  height: number,
+  pixelIndex: number,
+  strongBackground: Uint8Array
+): boolean {
+  const { data } = imageData
+  const x = pixelIndex % width
+  const y = Math.floor(pixelIndex / width)
+  const current = pixelRgb(data, pixelIndex)
+
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (dx === 0 && dy === 0) continue
+      const nx = x + dx
+      const ny = y + dy
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue
+
+      const neighborPixel = ny * width + nx
+      const neighborIdx = neighborPixel * 4
+      if (data[neighborIdx + 3] <= 8 || strongBackground[neighborPixel]) return true
+
+      if (rgbDistanceSquared(current, pixelRgb(data, neighborPixel)) > LOCAL_COLOR_VARIATION_DISTANCE_SQ) {
+        return true
+      }
+    }
+  }
+
+  return false
+}
+
+function hasFlatForegroundContinuation(
+  imageData: ImageData,
+  width: number,
+  height: number,
+  pixelIndex: number,
+  edgeDistance: Int16Array
+): boolean {
+  const { data } = imageData
+  const currentDistance = edgeDistance[pixelIndex]
+  if (currentDistance < 0) return false
+
+  const x = pixelIndex % width
+  const y = Math.floor(pixelIndex / width)
+  const current = pixelRgb(data, pixelIndex)
+
+  for (let dy = -2; dy <= 2; dy++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      if (dx === 0 && dy === 0) continue
+      if (dx * dx + dy * dy > 4) continue
+
+      const nx = x + dx
+      const ny = y + dy
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue
+
+      const neighborPixel = ny * width + nx
+      const neighborIdx = neighborPixel * 4
+      const neighborDistance = edgeDistance[neighborPixel]
+      if (data[neighborIdx + 3] <= 8) continue
+      if (neighborDistance !== -1 && neighborDistance <= currentDistance) continue
+
+      if (rgbDistanceSquared(current, pixelRgb(data, neighborPixel)) <= FLAT_FOREGROUND_DISTANCE_SQ) {
+        return true
+      }
+    }
+  }
+
+  return false
+}
+
+function findForegroundHint(
+  imageData: ImageData,
+  width: number,
+  height: number,
+  pixelIndex: number,
+  edgeDistance: Int16Array,
+  strongBackground: Uint8Array,
+  alphaEstimate: Float32Array,
+  searchRadius: number
+): Rgb | null {
+  const { data } = imageData
+  const currentDistance = Math.max(0, edgeDistance[pixelIndex])
+  const currentAlpha = alphaEstimate[pixelIndex]
+  const currentRgb = pixelRgb(data, pixelIndex)
+  const x = pixelIndex % width
+  const y = Math.floor(pixelIndex / width)
+  let bestPixel = -1
+  let bestScore = Number.POSITIVE_INFINITY
+
+  for (let dy = -searchRadius; dy <= searchRadius; dy++) {
+    for (let dx = -searchRadius; dx <= searchRadius; dx++) {
+      if (dx === 0 && dy === 0) continue
+      const distanceSquaredValue = dx * dx + dy * dy
+      if (distanceSquaredValue > searchRadius * searchRadius) continue
+
+      const nx = x + dx
+      const ny = y + dy
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue
+
+      const neighborPixel = ny * width + nx
+      const neighborIdx = neighborPixel * 4
+      const neighborDistance = edgeDistance[neighborPixel]
+      if (data[neighborIdx + 3] <= 8 || strongBackground[neighborPixel]) continue
+      if (neighborDistance !== -1 && neighborDistance <= currentDistance) continue
+
+      const neighborRgb = pixelRgb(data, neighborPixel)
+      if (
+        alphaEstimate[neighborPixel] <= currentAlpha + 0.05 &&
+        rgbDistanceSquared(currentRgb, neighborRgb) <= FLAT_FOREGROUND_DISTANCE_SQ
+      ) {
+        continue
+      }
+
+      const alphaPenalty = (1 - alphaEstimate[neighborPixel]) * 1000
+      const score = alphaPenalty + distanceSquaredValue + (neighborDistance === -1 ? 0 : 100)
+      if (score < bestScore) {
+        bestScore = score
+        bestPixel = neighborPixel
+      }
+    }
+  }
+
+  return bestPixel === -1 ? null : pixelRgb(data, bestPixel)
+}
+
+function estimateAlphaFromForegroundProjection(
+  rgb: Rgb,
+  bgColor: Rgb,
+  foreground: Rgb
+): { alpha: number; error: number } | null {
+  const vr = foreground[0] - bgColor[0]
+  const vg = foreground[1] - bgColor[1]
+  const vb = foreground[2] - bgColor[2]
+  const denominator = vr * vr + vg * vg + vb * vb
+  if (denominator < 1) return null
+
+  const wr = rgb[0] - bgColor[0]
+  const wg = rgb[1] - bgColor[1]
+  const wb = rgb[2] - bgColor[2]
+  const alpha = clamp01((wr * vr + wg * vg + wb * vb) / denominator)
+  const rr = bgColor[0] + alpha * vr
+  const rg = bgColor[1] + alpha * vg
+  const rb = bgColor[2] + alpha * vb
+  const error = Math.sqrt((
+    Math.pow(rgb[0] - rr, 2) +
+    Math.pow(rgb[1] - rg, 2) +
+    Math.pow(rgb[2] - rb, 2)
+  ) / 3)
+
+  return { alpha, error }
+}
+
+function buildEdgeConnectedMatteRegion(
+  imageData: ImageData,
+  width: number,
+  height: number,
+  alphaEstimate: Float32Array,
+  strongBackground: Uint8Array,
+  maxRefineDistance: number
+): { processMask: Uint8Array; edgeDistance: Int16Array } {
+  const totalPixels = width * height
+  const processMask = new Uint8Array(totalPixels)
+  const edgeDistance = new Int16Array(totalPixels)
+  edgeDistance.fill(-1)
+  const queue = new Int32Array(totalPixels)
+  let head = 0
+  let tail = 0
+
+  const enqueueBackground = (pixelIndex: number) => {
+    if (!strongBackground[pixelIndex] || processMask[pixelIndex]) return
+    processMask[pixelIndex] = 1
+    edgeDistance[pixelIndex] = 0
+    queue[tail++] = pixelIndex
+  }
+
+  for (let x = 0; x < width; x++) {
+    enqueueBackground(x)
+    enqueueBackground((height - 1) * width + x)
+  }
+  for (let y = 0; y < height; y++) {
+    enqueueBackground(y * width)
+    enqueueBackground(y * width + width - 1)
+  }
+
+  while (head < tail) {
+    const pixelIndex = queue[head++]
+    const distance = edgeDistance[pixelIndex]
+    const isCurrentBackground = strongBackground[pixelIndex] === 1
+
+    const x = pixelIndex % width
+    const y = Math.floor(pixelIndex / width)
+
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue
+        const nx = x + dx
+        const ny = y + dy
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue
+
+        const neighborPixel = ny * width + nx
+        if (edgeDistance[neighborPixel] !== -1) continue
+
+        if (strongBackground[neighborPixel]) {
+          processMask[neighborPixel] = 1
+          edgeDistance[neighborPixel] = 0
+          queue[tail++] = neighborPixel
+          continue
+        }
+
+        const nextDistance = isCurrentBackground ? 1 : distance + 1
+        if (nextDistance > maxRefineDistance) continue
+        if (alphaEstimate[neighborPixel] >= 1 - MATTE_ALPHA_EPSILON) continue
+        const followsCurrentMatteBand =
+          !isCurrentBackground &&
+          alphaEstimate[neighborPixel] <= alphaEstimate[pixelIndex] + 0.08 &&
+          rgbDistanceSquared(
+            pixelRgb(imageData.data, pixelIndex),
+            pixelRgb(imageData.data, neighborPixel)
+          ) <= FLAT_FOREGROUND_DISTANCE_SQ
+        if (
+          !followsCurrentMatteBand &&
+          !hasLocalColorVariation(imageData, width, height, neighborPixel, strongBackground)
+        ) {
+          continue
+        }
+
+        processMask[neighborPixel] = 1
+        edgeDistance[neighborPixel] = nextDistance
+        queue[tail++] = neighborPixel
+      }
+    }
+  }
+
+  return { processMask, edgeDistance }
+}
+
 export function removeBackgroundFromImage(
   imageData: ImageData,
   width: number,
@@ -398,101 +836,115 @@ export function removeBackgroundFromImage(
   colorSource: BackgroundColorSource = 'auto',
   fillInterior: boolean = false
 ): ImageData {
-  const bgColor = detectBackgroundColor(imageData, width, height, colorSource)
+  const bgColor = detectBackgroundColor(imageData, width, height, colorSource) as Rgb
   const result = new ImageData(width, height)
+  const { noiseAlpha, transparentDeltaE, maxRefineDistance, foregroundSearchRadius } = getMatteConfig(tolerance)
+  const totalPixels = width * height
+  const alphaEstimate = new Float32Array(totalPixels)
+  const strongBackground = new Uint8Array(totalPixels)
 
-  // 知覚的色差（ΔE）を使った色類似度チェック
-  // tolerance を ΔE スケールにマッピング（0-255 → 0-100）
-  // ΔE < 2.3 は人間には区別できない、< 5 は近い色、< 10 は同系色
-  const deltaEThreshold = (tolerance / 255) * 100
+  for (let pixelIndex = 0; pixelIndex < totalPixels; pixelIndex++) {
+    const idx = pixelIndex * 4
+    const sourceAlpha = imageData.data[idx + 3]
+    if (sourceAlpha <= 8) {
+      alphaEstimate[pixelIndex] = 0
+      strongBackground[pixelIndex] = 1
+      continue
+    }
 
-  const isColorSimilar = (idx: number): boolean => {
-    const r = imageData.data[idx]
-    const g = imageData.data[idx + 1]
-    const b = imageData.data[idx + 2]
+    const rgb: Rgb = [imageData.data[idx], imageData.data[idx + 1], imageData.data[idx + 2]]
+    const rawAlpha = estimateAlphaFromBackground(rgb, bgColor)
+    alphaEstimate[pixelIndex] = applyAlphaNoiseFloor(rawAlpha, noiseAlpha)
+    const colorDiff = deltaE(rgb[0], rgb[1], rgb[2], bgColor[0], bgColor[1], bgColor[2])
+    if (alphaEstimate[pixelIndex] === 0 || colorDiff <= transparentDeltaE) {
+      strongBackground[pixelIndex] = 1
+    }
+  }
 
-    const colorDiff = deltaE(r, g, b, bgColor[0], bgColor[1], bgColor[2])
-    return colorDiff <= deltaEThreshold
+  const { processMask, edgeDistance } = fillInterior
+    ? {
+        processMask: new Uint8Array(totalPixels).fill(1),
+        edgeDistance: new Int16Array(totalPixels).fill(-1)
+      }
+    : buildEdgeConnectedMatteRegion(
+      imageData,
+      width,
+      height,
+      alphaEstimate,
+      strongBackground,
+      maxRefineDistance
+    )
+
+  for (let pixelIndex = 0; pixelIndex < totalPixels; pixelIndex++) {
+    const idx = pixelIndex * 4
+    const sourceAlpha = imageData.data[idx + 3]
+    const rgb: Rgb = [imageData.data[idx], imageData.data[idx + 1], imageData.data[idx + 2]]
+
+    if (!processMask[pixelIndex]) {
+      result.data[idx] = rgb[0]
+      result.data[idx + 1] = rgb[1]
+      result.data[idx + 2] = rgb[2]
+      result.data[idx + 3] = sourceAlpha
+      continue
+    }
+
+    let matteAlpha = alphaEstimate[pixelIndex]
+    let foregroundHint: Rgb | undefined
+    let projectedFromDifferentForeground = false
+
+    if (!fillInterior && matteAlpha > 0 && matteAlpha < 1) {
+      const hint = findForegroundHint(
+        imageData,
+        width,
+        height,
+        pixelIndex,
+        edgeDistance,
+        strongBackground,
+        alphaEstimate,
+        foregroundSearchRadius
+      )
+
+      if (hint) {
+        const projected = estimateAlphaFromForegroundProjection(rgb, bgColor, hint)
+        const maxProjectionError = 18 + (1 - (projected?.alpha ?? 1)) * 14
+        if (projected && projected.error <= maxProjectionError) {
+          matteAlpha = applyAlphaNoiseFloor(projected.alpha, noiseAlpha)
+          foregroundHint = hint
+          projectedFromDifferentForeground = rgbDistanceSquared(rgb, hint) > FLAT_FOREGROUND_DISTANCE_SQ
+        }
+      }
+
+      if (
+        !projectedFromDifferentForeground &&
+        matteAlpha > 0 &&
+        matteAlpha < 1 &&
+        (
+          hasFlatForegroundContinuation(imageData, width, height, pixelIndex, edgeDistance) ||
+          !hasLocalColorVariation(imageData, width, height, pixelIndex, strongBackground)
+        )
+      ) {
+        matteAlpha = 1
+        foregroundHint = undefined
+      }
+    }
+
+    const outputAlpha = clampByte((sourceAlpha / 255) * matteAlpha * 255)
+    const recoveredRgb = recoverForegroundRgb(rgb, bgColor, matteAlpha, foregroundHint)
+    result.data[idx] = recoveredRgb[0]
+    result.data[idx + 1] = recoveredRgb[1]
+    result.data[idx + 2] = recoveredRgb[2]
+    result.data[idx + 3] = outputAlpha
   }
 
   if (fillInterior) {
-    // 内部も透過: 全ピクセルをスキャンして色が近いものを透過
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const idx = (y * width + x) * 4
-        result.data[idx] = imageData.data[idx]
-        result.data[idx + 1] = imageData.data[idx + 1]
-        result.data[idx + 2] = imageData.data[idx + 2]
-
-        if (isColorSimilar(idx)) {
-          result.data[idx + 3] = 0 // 透過
-        } else {
-          result.data[idx + 3] = imageData.data[idx + 3]
-        }
-      }
-    }
-  } else {
-    // フラッドフィル方式: 端からのみ透過
-    const visited = new Set<number>()
-
-    const floodFill = (startX: number, startY: number) => {
-      const queue: [number, number][] = [[startX, startY]]
-
-      while (queue.length > 0) {
-        const [x, y] = queue.shift()!
-        const idx = (y * width + x) * 4
-        const pixelKey = y * width + x
-
-        if (x < 0 || x >= width || y < 0 || y >= height || visited.has(pixelKey)) {
-          continue
-        }
-
-        visited.add(pixelKey)
-
-        if (isColorSimilar(idx)) {
-          // Mark as transparent
-          result.data[idx] = imageData.data[idx]
-          result.data[idx + 1] = imageData.data[idx + 1]
-          result.data[idx + 2] = imageData.data[idx + 2]
-          result.data[idx + 3] = 0 // Set alpha to 0
-
-          // Add neighbors
-          queue.push([x + 1, y])
-          queue.push([x - 1, y])
-          queue.push([x, y + 1])
-          queue.push([x, y - 1])
-        } else {
-          // Keep original pixel
-          result.data[idx] = imageData.data[idx]
-          result.data[idx + 1] = imageData.data[idx + 1]
-          result.data[idx + 2] = imageData.data[idx + 2]
-          result.data[idx + 3] = imageData.data[idx + 3]
-        }
-      }
-    }
-
-    // Start flood fill from all edges
-    for (let x = 0; x < width; x++) {
-      floodFill(x, 0) // Top edge
-      floodFill(x, height - 1) // Bottom edge
-    }
-    for (let y = 0; y < height; y++) {
-      floodFill(0, y) // Left edge
-      floodFill(width - 1, y) // Right edge
-    }
-
-    // Copy remaining pixels
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const idx = (y * width + x) * 4
-        const pixelKey = y * width + x
-        if (!visited.has(pixelKey)) {
-          result.data[idx] = imageData.data[idx]
-          result.data[idx + 1] = imageData.data[idx + 1]
-          result.data[idx + 2] = imageData.data[idx + 2]
-          result.data[idx + 3] = imageData.data[idx + 3]
-        }
-      }
+    for (let pixelIndex = 0; pixelIndex < totalPixels; pixelIndex++) {
+      const idx = pixelIndex * 4
+      const sourceAlpha = imageData.data[idx + 3]
+      if (sourceAlpha <= 8 || !strongBackground[pixelIndex]) continue
+      result.data[idx] = 0
+      result.data[idx + 1] = 0
+      result.data[idx + 2] = 0
+      result.data[idx + 3] = 0
     }
   }
 

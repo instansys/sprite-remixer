@@ -91,7 +91,7 @@ function App() {
     DEFAULT_SETTINGS.flipHorizontal
   )
   const [fps, setFps] = useLocalStorage(STORAGE_KEYS.fps, DEFAULT_SETTINGS.fps)
-  const [previewBgColor, setPreviewBgColor] = useLocalStorageString(
+  const [previewBgColor, setPreviewBgColor] = useLocalStorageString<string>(
     STORAGE_KEYS.previewBgColor,
     DEFAULT_SETTINGS.previewBgColor
   )
