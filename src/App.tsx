@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 import type {
@@ -7,7 +7,8 @@ import type {
   OutputFormat,
   VideoProgress,
   SourceImage,
-  ResolutionRecommendation
+  ResolutionRecommendation,
+  CropMargins
 } from './types'
 import type { BackgroundColorSource } from './imageProcessing'
 import { getPixelSnapResolutionRecommendations } from './imageProcessing'
@@ -41,9 +42,18 @@ import {
   saveSettingsToFile,
   loadSettingsFromFile,
   getDefaultSettings,
-  exportAnimatedGif,
+  exportAnimatedGifFromSpriteSheet,
   detectSpriteGrid
 } from './utils'
+import {
+  DEFAULT_CROP_MARGINS,
+  areCropMarginsEqual,
+  cropSpriteSheet,
+  detectSpriteSheetAlphaCrop,
+  getCroppedFrameSize,
+  isCropMarginsEmpty,
+  normalizeCropMargins
+} from './utils/crop'
 
 // 画像の自然寸法を取得する
 function loadImageSize(src: string): Promise<{ width: number; height: number }> {
@@ -69,6 +79,22 @@ function sameRecommendations(
       item.logicalWidth === other.logicalWidth &&
       item.logicalHeight === other.logicalHeight
   })
+}
+
+type RasterOutputFormat = Exclude<OutputFormat, 'gif'>
+
+interface ProcessedSpriteSheetInfo {
+  imageUrl: string
+  frameWidth: number
+  frameHeight: number
+  frameCount: number
+  outputCols: number
+  imageFormat: RasterOutputFormat
+}
+
+interface PreviewSpriteSheetInfo extends ProcessedSpriteSheetInfo {
+  sourceImageUrl: string
+  crop: CropMargins
 }
 
 function App() {
@@ -100,6 +126,11 @@ function App() {
     DEFAULT_SETTINGS.frameSamplingQuality
   )
 
+  // Crop settings for the completed sprite sheet
+  const [cropMargins, setCropMargins] = useState<CropMargins>(() => ({ ...DEFAULT_CROP_MARGINS }))
+  const [previewSpriteSheet, setPreviewSpriteSheet] = useState<PreviewSpriteSheetInfo | null>(null)
+  const [isDetectingCrop, setIsDetectingCrop] = useState(false)
+
   // Aspect ratio locking
   const [lockAspectRatio, setLockAspectRatio] = useState(false)
   const lockedAspectRatioRef = useRef(1)
@@ -112,7 +143,7 @@ function App() {
   const [fillInterior, setFillInterior] = useState(false)
 
   // Processing state
-  const [processedImageUrl, setProcessedImageUrl] = useState<string | null>(null)
+  const [processedSheetInfo, setProcessedSheetInfo] = useState<ProcessedSpriteSheetInfo | null>(null)
   const [resolutionRecommendations, setResolutionRecommendations] = useState<ResolutionRecommendation[]>([])
   const [isProcessingVideo, setIsProcessingVideo] = useState(false)
   const [videoProgress, setVideoProgress] = useState<VideoProgress>({ current: 0, total: 0 })
@@ -149,6 +180,38 @@ function App() {
     totalCount
   } = useFrameSelection(sourceImages)
 
+  const processedFrameWidth = processedSheetInfo?.frameWidth ?? targetWidth
+  const processedFrameHeight = processedSheetInfo?.frameHeight ?? targetHeight
+  const normalizedCropMargins = useMemo(
+    () => normalizeCropMargins(cropMargins, processedFrameWidth, processedFrameHeight),
+    [
+      cropMargins,
+      processedFrameWidth,
+      processedFrameHeight
+    ]
+  )
+  const croppedFrameSize = useMemo(
+    () => getCroppedFrameSize(normalizedCropMargins, processedFrameWidth, processedFrameHeight),
+    [normalizedCropMargins, processedFrameWidth, processedFrameHeight]
+  )
+  const activeSpriteSheet = useMemo<PreviewSpriteSheetInfo | null>(() => {
+    if (!processedSheetInfo) return null
+
+    if (
+      previewSpriteSheet &&
+      previewSpriteSheet.sourceImageUrl === processedSheetInfo.imageUrl &&
+      areCropMarginsEqual(previewSpriteSheet.crop, normalizedCropMargins)
+    ) {
+      return previewSpriteSheet
+    }
+
+    return {
+      ...processedSheetInfo,
+      sourceImageUrl: processedSheetInfo.imageUrl,
+      crop: { ...DEFAULT_CROP_MARGINS }
+    }
+  }, [processedSheetInfo, previewSpriteSheet, normalizedCropMargins])
+
   const {
     isPlaying,
     isReversed,
@@ -156,13 +219,87 @@ function App() {
     toggleReverse,
     canvasRef: animationCanvasRef
   } = useAnimation({
-    processedImageUrl,
-    selectedFrames,
+    processedImageUrl: activeSpriteSheet?.imageUrl ?? null,
+    frameCount: activeSpriteSheet?.frameCount ?? 0,
     fps,
-    targetWidth,
-    targetHeight,
-    outputCols
+    targetWidth: activeSpriteSheet?.frameWidth ?? targetWidth,
+    targetHeight: activeSpriteSheet?.frameHeight ?? targetHeight,
+    outputCols: activeSpriteSheet?.outputCols ?? outputCols
   })
+
+  const createPreviewSpriteSheet = useCallback(async (
+    crop: CropMargins
+  ): Promise<PreviewSpriteSheetInfo | null> => {
+    if (!processedSheetInfo) return null
+
+    const normalizedCrop = normalizeCropMargins(
+      crop,
+      processedSheetInfo.frameWidth,
+      processedSheetInfo.frameHeight
+    )
+    const frameSize = getCroppedFrameSize(
+      normalizedCrop,
+      processedSheetInfo.frameWidth,
+      processedSheetInfo.frameHeight
+    )
+    const imageFormat: RasterOutputFormat = outputFormat === 'gif' ? 'png' : outputFormat
+    const canReuseOriginal = isCropMarginsEmpty(normalizedCrop) &&
+      imageFormat === processedSheetInfo.imageFormat
+
+    const imageUrl = canReuseOriginal
+      ? processedSheetInfo.imageUrl
+      : await cropSpriteSheet({
+          imageUrl: processedSheetInfo.imageUrl,
+          frameWidth: processedSheetInfo.frameWidth,
+          frameHeight: processedSheetInfo.frameHeight,
+          frameCount: processedSheetInfo.frameCount,
+          outputCols: processedSheetInfo.outputCols,
+          crop: normalizedCrop,
+          outputFormat: imageFormat,
+          preserveOriginalWhenUncropped: false
+        })
+
+    if (!imageUrl) return null
+
+    return {
+      sourceImageUrl: processedSheetInfo.imageUrl,
+      imageUrl,
+      frameWidth: frameSize.width,
+      frameHeight: frameSize.height,
+      frameCount: processedSheetInfo.frameCount,
+      outputCols: processedSheetInfo.outputCols,
+      imageFormat,
+      crop: normalizedCrop
+    }
+  }, [processedSheetInfo, outputFormat])
+
+  useEffect(() => {
+    setCropMargins(prev => {
+      const next = normalizeCropMargins(prev, processedFrameWidth, processedFrameHeight)
+      return areCropMarginsEqual(prev, next) ? prev : next
+    })
+  }, [processedFrameWidth, processedFrameHeight])
+
+  useEffect(() => {
+    let cancelled = false
+
+    createPreviewSpriteSheet(normalizedCropMargins)
+      .then((sheet) => {
+        if (!cancelled) {
+          setPreviewSpriteSheet(sheet)
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to crop sprite sheet:', error)
+        if (!cancelled) {
+          setPreviewSpriteSheet(null)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [createPreviewSpriteSheet, normalizedCropMargins])
 
   // Aspect ratio handling
   const prevTargetWidthRef = useRef(targetWidth)
@@ -487,7 +624,21 @@ function App() {
       pixelPerfectResize,
       flipHorizontal
     })
-    setProcessedImageUrl(result)
+    if (!result) {
+      setProcessedSheetInfo(null)
+      setPreviewSpriteSheet(null)
+      return
+    }
+
+    setProcessedSheetInfo({
+      imageUrl: result,
+      frameWidth: targetWidth,
+      frameHeight: targetHeight,
+      frameCount: selectedFrames.length,
+      outputCols,
+      imageFormat: outputFormat === 'gif' ? 'png' : outputFormat
+    })
+    setPreviewSpriteSheet(null)
   }
 
   // Settings management
@@ -545,26 +696,54 @@ function App() {
     setLockAspectRatio(locked)
   }, [])
 
+  const handleCropChange = useCallback((side: keyof CropMargins, value: number) => {
+    setCropMargins(prev => normalizeCropMargins({
+      ...prev,
+      [side]: value
+    }, processedFrameWidth, processedFrameHeight))
+  }, [processedFrameWidth, processedFrameHeight])
+
+  const handleResetCrop = useCallback(() => {
+    setCropMargins({ ...DEFAULT_CROP_MARGINS })
+  }, [])
+
+  const handleAutoCrop = useCallback(async () => {
+    if (!processedSheetInfo) return
+
+    setIsDetectingCrop(true)
+    try {
+      const detectedCrop = await detectSpriteSheetAlphaCrop({
+        imageUrl: processedSheetInfo.imageUrl,
+        frameWidth: processedSheetInfo.frameWidth,
+        frameHeight: processedSheetInfo.frameHeight,
+        frameCount: processedSheetInfo.frameCount,
+        outputCols: processedSheetInfo.outputCols
+      })
+      setCropMargins(detectedCrop)
+    } catch (error) {
+      console.error('Failed to detect sprite crop:', error)
+    } finally {
+      setIsDetectingCrop(false)
+    }
+  }, [processedSheetInfo])
+
   const handleDownload = async () => {
-    if (!processedImageUrl) return
+    if (!processedSheetInfo) return
+
+    const outputSheet = await createPreviewSpriteSheet(normalizedCropMargins)
+    if (!outputSheet) return
 
     if (outputFormat === 'gif') {
       setIsEncodingGif(true)
-      setGifProgress({ current: 0, total: selectedFrames.length })
+      setGifProgress({ current: 0, total: outputSheet.frameCount })
       try {
-        const gifUrl = await exportAnimatedGif({
-          sourceImages,
-          selectedFrames,
-          targetWidth,
-          targetHeight,
+        const gifUrl = await exportAnimatedGifFromSpriteSheet({
+          spriteSheetUrl: outputSheet.imageUrl,
+          frameWidth: outputSheet.frameWidth,
+          frameHeight: outputSheet.frameHeight,
+          frameCount: outputSheet.frameCount,
+          outputCols: outputSheet.outputCols,
           fps,
-          pixelPerfectResize,
-          flipHorizontal,
-          removeBackground,
-          backgroundTolerance,
-          edgeErosion,
-          bgColorSource,
-          fillInterior,
           onProgress: (current, total) => {
             setGifProgress({ current, total })
           }
@@ -580,7 +759,7 @@ function App() {
       }
     } else {
       const ext = outputFormat === 'webp' ? 'webp' : 'png'
-      downloadImage(processedImageUrl, `sprite-sheet-pixel-art.${ext}`)
+      downloadImage(outputSheet.imageUrl, `sprite-sheet-pixel-art.${ext}`)
     }
   }
 
@@ -697,9 +876,14 @@ function App() {
             onRemoveSource={removeSource}
           />
 
-          {processedImageUrl && (
+          {processedSheetInfo && activeSpriteSheet && (
             <ResultsPanel
-              processedImageUrl={processedImageUrl}
+              processedImageUrl={activeSpriteSheet.imageUrl}
+              sourceFrameWidth={processedSheetInfo.frameWidth}
+              sourceFrameHeight={processedSheetInfo.frameHeight}
+              croppedFrameWidth={croppedFrameSize.width}
+              croppedFrameHeight={croppedFrameSize.height}
+              cropMargins={normalizedCropMargins}
               isPlaying={isPlaying}
               isReversed={isReversed}
               fps={fps}
@@ -708,10 +892,14 @@ function App() {
               animationCanvasRef={animationCanvasRef}
               previewBgColor={previewBgColor}
               onDownload={handleDownload}
+              onCropChange={handleCropChange}
+              onAutoCrop={handleAutoCrop}
+              onResetCrop={handleResetCrop}
               onTogglePlayback={togglePlayback}
               onToggleReverse={toggleReverse}
               onFpsChange={setFps}
               onPreviewBgColorChange={setPreviewBgColor}
+              isDetectingCrop={isDetectingCrop}
             />
           )}
         </div>

@@ -35,6 +35,13 @@ export type FrameSamplingQuality = 'low' | 'medium' | 'high' | 'ultra' | 'all'
 
 export type OutputFormat = 'png' | 'webp' | 'gif'
 
+export interface CropMargins {
+  top: number
+  right: number
+  bottom: number
+  left: number
+}
+
 export interface ResolutionRecommendation {
   label: string
   width: number

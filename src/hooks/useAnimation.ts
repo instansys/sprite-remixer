@@ -1,9 +1,9 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
-import type { FrameData } from '../types'
+import { resolveSpriteSheetOutputCols } from '../utils/crop'
 
 interface UseAnimationOptions {
   processedImageUrl: string | null
-  selectedFrames: FrameData[]
+  frameCount: number
   fps: number
   targetWidth: number
   targetHeight: number
@@ -12,7 +12,7 @@ interface UseAnimationOptions {
 
 export function useAnimation({
   processedImageUrl,
-  selectedFrames,
+  frameCount,
   fps,
   targetWidth,
   targetHeight,
@@ -35,13 +35,13 @@ export function useAnimation({
       const ctx = canvasRef.current.getContext('2d')
       if (!ctx) return
 
-      if (selectedFrames.length === 0) return
+      if (frameCount === 0) return
 
       const img = new Image()
       img.onload = () => {
-        const frameIndex = currentFrame % selectedFrames.length
+        const frameIndex = currentFrame % frameCount
         // Match the output layout calculation in spriteProcessing.ts
-        const outputCols = outputColsSetting > 0 ? outputColsSetting : Math.ceil(Math.sqrt(selectedFrames.length))
+        const outputCols = resolveSpriteSheetOutputCols(outputColsSetting, frameCount)
         const col = frameIndex % outputCols
         const row = Math.floor(frameIndex / outputCols)
 
@@ -62,15 +62,15 @@ export function useAnimation({
 
       setCurrentFrame(prev => {
         if (isReversed) {
-          return (prev - 1 + selectedFrames.length) % selectedFrames.length
+          return (prev - 1 + frameCount) % frameCount
         }
-        return (prev + 1) % selectedFrames.length
+        return (prev + 1) % frameCount
       })
       lastFrameTimeRef.current = timestamp
     }
 
     animationFrameRef.current = requestAnimationFrame(animate)
-  }, [isPlaying, isReversed, processedImageUrl, selectedFrames, fps, currentFrame, outputColsSetting, targetWidth, targetHeight])
+  }, [isPlaying, isReversed, processedImageUrl, frameCount, fps, currentFrame, outputColsSetting, targetWidth, targetHeight])
 
   useEffect(() => {
     if (isPlaying) {
@@ -95,7 +95,7 @@ export function useAnimation({
 
   // Draw the first frame when processedImageUrl changes or settings change
   useEffect(() => {
-    if (!processedImageUrl || !canvasRef.current || selectedFrames.length === 0) return
+    if (!processedImageUrl || !canvasRef.current || frameCount === 0) return
 
     const canvas = canvasRef.current
     canvas.width = targetWidth
@@ -123,7 +123,7 @@ export function useAnimation({
 
     // Reset frame counter
     setCurrentFrame(0)
-  }, [processedImageUrl, targetWidth, targetHeight, selectedFrames.length, outputColsSetting])
+  }, [processedImageUrl, targetWidth, targetHeight, frameCount, outputColsSetting])
 
   const togglePlayback = useCallback(() => {
     setIsPlaying(prev => !prev)
