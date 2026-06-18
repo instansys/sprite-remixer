@@ -3,7 +3,7 @@ import type { BackgroundColorSource } from '../imageProcessing'
 import {
   scaleImageNearestNeighbor,
   scaleImageWithPixelSnap,
-  removeBackgroundFromImage,
+  removeBackgroundFromImageFast,
   flipCanvasHorizontal,
   exportCanvas
 } from '../imageProcessing'
@@ -82,26 +82,27 @@ export async function processSprites(options: ProcessSpritesOptions): Promise<st
     ? buildStablePixelSnapTargets(sourceImages, selectedFrames, loadedImages)
     : {}
 
-  selectedFrames.forEach((frame, idx) => {
+  for (let idx = 0; idx < selectedFrames.length; idx++) {
+    const frame = selectedFrames[idx]
     const destCol = idx % outputCols
     const destRow = Math.floor(idx / outputCols)
 
     const sourceImg = loadedImages[frame.sourceIndex]
     const source = sourceImages[frame.sourceIndex]
-    if (!sourceImg || !source) return
+    if (!sourceImg || !source) continue
 
     const tempCanvas = extractFrameCanvas(sourceImg, source, frame)
-    if (!tempCanvas) return
+    if (!tempCanvas) continue
 
     let scaledCanvas = pixelPerfectResize
       ? scaleImageWithPixelSnap(tempCanvas, targetWidth, targetHeight, pixelSnapTargets[frame.sourceIndex])
       : scaleImageNearestNeighbor(tempCanvas, targetWidth, targetHeight)
     const scaledCtx = scaledCanvas.getContext('2d')
-    if (!scaledCtx) return
+    if (!scaledCtx) continue
 
     if (removeBackground) {
       const imageData = scaledCtx.getImageData(0, 0, targetWidth, targetHeight)
-      const processedData = removeBackgroundFromImage(
+      const processedData = await removeBackgroundFromImageFast(
         imageData,
         targetWidth,
         targetHeight,
@@ -128,7 +129,7 @@ export async function processSprites(options: ProcessSpritesOptions): Promise<st
       targetWidth,
       targetHeight
     )
-  })
+  }
 
   return exportCanvas(resultCanvas, outputFormat)
 }

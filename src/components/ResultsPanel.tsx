@@ -4,8 +4,10 @@ import { NumberInput } from '../NumberInput'
 
 interface ResultsPanelProps {
   processedImageUrl: string
+  cropPreviewImageUrl: string
   sourceFrameWidth: number
   sourceFrameHeight: number
+  sourceSheetCols: number
   croppedFrameWidth: number
   croppedFrameHeight: number
   cropMargins: CropMargins
@@ -29,8 +31,10 @@ interface ResultsPanelProps {
 
 export function ResultsPanel({
   processedImageUrl,
+  cropPreviewImageUrl,
   sourceFrameWidth,
   sourceFrameHeight,
+  sourceSheetCols,
   croppedFrameWidth,
   croppedFrameHeight,
   cropMargins,
@@ -61,6 +65,18 @@ export function ResultsPanel({
     { key: 'bottom', label: '下', max: Math.max(0, sourceFrameHeight - cropMargins.top - 1) },
     { key: 'left', label: '左', max: Math.max(0, sourceFrameWidth - cropMargins.right - 1) }
   ]
+  const cropBoxStyle = {
+    left: `${(cropMargins.left / sourceFrameWidth) * 100}%`,
+    top: `${(cropMargins.top / sourceFrameHeight) * 100}%`,
+    width: `${(croppedFrameWidth / sourceFrameWidth) * 100}%`,
+    height: `${(croppedFrameHeight / sourceFrameHeight) * 100}%`
+  }
+  const cropPreviewStyle = {
+    aspectRatio: `${sourceFrameWidth} / ${sourceFrameHeight}`
+  }
+  const cropPreviewImageStyle = {
+    width: `${Math.max(1, sourceSheetCols) * 100}%`
+  }
 
   return (
     <div className="results-panel">
@@ -120,6 +136,16 @@ export function ResultsPanel({
       <div className="crop-section">
         <h3>✂️ クロップ</h3>
         <div className="crop-body">
+          <div className="crop-preview-frame" style={cropPreviewStyle}>
+            <img
+              src={cropPreviewImageUrl}
+              alt=""
+              className="crop-preview-image"
+              style={cropPreviewImageStyle}
+              draggable={false}
+            />
+            <div className="crop-preview-box" style={cropBoxStyle} />
+          </div>
           <div className="crop-summary">
             <span>出力サイズ</span>
             <strong>{croppedFrameWidth} × {croppedFrameHeight}px</strong>

@@ -52,7 +52,8 @@ import {
   detectSpriteSheetAlphaCrop,
   getCroppedFrameSize,
   isCropMarginsEmpty,
-  normalizeCropMargins
+  normalizeCropMargins,
+  resolveSpriteSheetOutputCols
 } from './utils/crop'
 
 // 画像の自然寸法を取得する
@@ -879,8 +880,13 @@ function App() {
           {processedSheetInfo && activeSpriteSheet && (
             <ResultsPanel
               processedImageUrl={activeSpriteSheet.imageUrl}
+              cropPreviewImageUrl={processedSheetInfo.imageUrl}
               sourceFrameWidth={processedSheetInfo.frameWidth}
               sourceFrameHeight={processedSheetInfo.frameHeight}
+              sourceSheetCols={resolveSpriteSheetOutputCols(
+                processedSheetInfo.outputCols,
+                processedSheetInfo.frameCount
+              )}
               croppedFrameWidth={croppedFrameSize.width}
               croppedFrameHeight={croppedFrameSize.height}
               cropMargins={normalizedCropMargins}

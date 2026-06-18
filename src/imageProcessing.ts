@@ -546,6 +546,7 @@ function getMatteConfig(tolerance: number) {
   return {
     noiseAlpha,
     transparentDeltaE,
+    deltaEAlphaCheck: Math.min(1, noiseAlpha * 2 + 0.02),
     maxRefineDistance: Math.max(2, Math.min(6, Math.ceil(normalizedTolerance / 48) + 2)),
     foregroundSearchRadius: Math.max(3, Math.min(8, Math.ceil(normalizedTolerance / 32) + 3))
   }
@@ -838,7 +839,13 @@ export function removeBackgroundFromImage(
 ): ImageData {
   const bgColor = detectBackgroundColor(imageData, width, height, colorSource) as Rgb
   const result = new ImageData(width, height)
-  const { noiseAlpha, transparentDeltaE, maxRefineDistance, foregroundSearchRadius } = getMatteConfig(tolerance)
+  const {
+    noiseAlpha,
+    transparentDeltaE,
+    deltaEAlphaCheck,
+    maxRefineDistance,
+    foregroundSearchRadius
+  } = getMatteConfig(tolerance)
   const totalPixels = width * height
   const alphaEstimate = new Float32Array(totalPixels)
   const strongBackground = new Uint8Array(totalPixels)
@@ -855,9 +862,14 @@ export function removeBackgroundFromImage(
     const rgb: Rgb = [imageData.data[idx], imageData.data[idx + 1], imageData.data[idx + 2]]
     const rawAlpha = estimateAlphaFromBackground(rgb, bgColor)
     alphaEstimate[pixelIndex] = applyAlphaNoiseFloor(rawAlpha, noiseAlpha)
-    const colorDiff = deltaE(rgb[0], rgb[1], rgb[2], bgColor[0], bgColor[1], bgColor[2])
-    if (alphaEstimate[pixelIndex] === 0 || colorDiff <= transparentDeltaE) {
+
+    if (alphaEstimate[pixelIndex] === 0) {
       strongBackground[pixelIndex] = 1
+    } else if (alphaEstimate[pixelIndex] <= deltaEAlphaCheck) {
+      const colorDiff = deltaE(rgb[0], rgb[1], rgb[2], bgColor[0], bgColor[1], bgColor[2])
+      if (colorDiff <= transparentDeltaE) {
+        strongBackground[pixelIndex] = 1
+      }
     }
   }
 
@@ -954,6 +966,133 @@ export function removeBackgroundFromImage(
   }
 
   return result
+}
+
+interface BackgroundRemovalWasmExports {
+  memory: WebAssembly.Memory
+  alloc: (size: number) => number
+  dealloc: (ptr: number, size: number) => void
+  remove_background: (
+    inputPtr: number,
+    outputPtr: number,
+    width: number,
+    height: number,
+    tolerance: number,
+    erosion: number,
+    colorSource: number,
+    fillInterior: number
+  ) => number
+}
+
+let backgroundRemovalWasmPromise: Promise<BackgroundRemovalWasmExports | null> | null = null
+
+function backgroundColorSourceToWasm(source: BackgroundColorSource): number {
+  switch (source) {
+    case 'top-left':
+      return 1
+    case 'top-right':
+      return 2
+    case 'bottom-left':
+      return 3
+    case 'bottom-right':
+      return 4
+    case 'auto':
+    default:
+      return 0
+  }
+}
+
+function loadBackgroundRemovalWasm(): Promise<BackgroundRemovalWasmExports | null> {
+  if (backgroundRemovalWasmPromise) return backgroundRemovalWasmPromise
+
+  backgroundRemovalWasmPromise = (async () => {
+    if (typeof WebAssembly === 'undefined' || typeof fetch === 'undefined') return null
+
+    try {
+      const wasmUrl = new URL('./wasm/background_removal.wasm', import.meta.url)
+      const response = await fetch(wasmUrl)
+      if (!response.ok) return null
+
+      const bytes = await response.arrayBuffer()
+      const instance = await WebAssembly.instantiate(bytes, {})
+      const exports = instance.instance.exports
+
+      if (
+        !(exports.memory instanceof WebAssembly.Memory) ||
+        typeof exports.alloc !== 'function' ||
+        typeof exports.dealloc !== 'function' ||
+        typeof exports.remove_background !== 'function'
+      ) {
+        return null
+      }
+
+      return exports as unknown as BackgroundRemovalWasmExports
+    } catch {
+      return null
+    }
+  })()
+
+  return backgroundRemovalWasmPromise
+}
+
+export async function removeBackgroundFromImageFast(
+  imageData: ImageData,
+  width: number,
+  height: number,
+  tolerance: number = 10,
+  erosion: number = 0,
+  colorSource: BackgroundColorSource = 'auto',
+  fillInterior: boolean = false
+): Promise<ImageData> {
+  const wasm = await loadBackgroundRemovalWasm()
+  if (!wasm) {
+    return removeBackgroundFromImage(
+      imageData,
+      width,
+      height,
+      tolerance,
+      erosion,
+      colorSource,
+      fillInterior
+    )
+  }
+
+  const byteLength = width * height * 4
+  const inputPtr = wasm.alloc(byteLength)
+  const outputPtr = wasm.alloc(byteLength)
+
+  try {
+    new Uint8Array(wasm.memory.buffer).set(imageData.data, inputPtr)
+    const status = wasm.remove_background(
+      inputPtr,
+      outputPtr,
+      width,
+      height,
+      Math.max(0, Math.min(255, Math.round(tolerance))),
+      Math.max(0, Math.round(erosion)),
+      backgroundColorSourceToWasm(colorSource),
+      fillInterior ? 1 : 0
+    )
+
+    if (status !== 0) {
+      return removeBackgroundFromImage(
+        imageData,
+        width,
+        height,
+        tolerance,
+        erosion,
+        colorSource,
+        fillInterior
+      )
+    }
+
+    const memory = new Uint8Array(wasm.memory.buffer)
+    const output = new Uint8ClampedArray(memory.slice(outputPtr, outputPtr + byteLength))
+    return new ImageData(output, width, height)
+  } finally {
+    wasm.dealloc(inputPtr, byteLength)
+    wasm.dealloc(outputPtr, byteLength)
+  }
 }
 
 export function scaleImageNearestNeighbor(

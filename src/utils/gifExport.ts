@@ -4,7 +4,7 @@ import type { BackgroundColorSource } from '../imageProcessing'
 import {
   scaleImageNearestNeighbor,
   scaleImageWithPixelSnap,
-  removeBackgroundFromImage,
+  removeBackgroundFromImageFast,
   flipCanvasHorizontal
 } from '../imageProcessing'
 import { resolveSpriteSheetOutputCols } from './crop'
@@ -25,6 +25,7 @@ interface GifExportOptions {
   flipHorizontal: boolean
   onProgress?: (current: number, total: number) => void
 }
+
 interface SpriteSheetGifExportOptions {
   spriteSheetUrl: string
   frameWidth: number
@@ -51,7 +52,6 @@ function hasTransparentPixels(data: Uint8ClampedArray): boolean {
 
   return false
 }
-
 
 export async function exportAnimatedGif(options: GifExportOptions): Promise<string | null> {
   const {
@@ -114,7 +114,7 @@ export async function exportAnimatedGif(options: GifExportOptions): Promise<stri
     // Optional background removal
     if (removeBackground) {
       const imageData = scaledCtx.getImageData(0, 0, targetWidth, targetHeight)
-      const processedData = removeBackgroundFromImage(
+      const processedData = await removeBackgroundFromImageFast(
         imageData,
         targetWidth,
         targetHeight,

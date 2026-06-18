@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "build:wasm": "rustc --edition=2021 --target wasm32-unknown-unknown -C opt-level=3 -C lto=fat -C codegen-units=1 -C panic=abort -C strip=symbols --crate-type=cdylib wasm/background_removal/src/lib.rs -o src/wasm/background_removal.wasm",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"

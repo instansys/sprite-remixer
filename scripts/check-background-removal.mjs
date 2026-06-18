@@ -20,10 +20,92 @@ const {
   removeBackgroundFromImage
 } = await import('../src/imageProcessing.ts')
 
+const wasmExports = await loadWasm()
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message)
   }
+}
+
+async function loadWasm() {
+  const wasmBytes = await Bun.file(new URL('../src/wasm/background_removal.wasm', import.meta.url)).arrayBuffer()
+  const { instance } = await WebAssembly.instantiate(wasmBytes, {})
+  return instance.exports
+}
+
+function sourceToWasm(source) {
+  switch (source) {
+    case 'top-left':
+      return 1
+    case 'top-right':
+      return 2
+    case 'bottom-left':
+      return 3
+    case 'bottom-right':
+      return 4
+    default:
+      return 0
+  }
+}
+
+function removeBackgroundWithWasm(
+  image,
+  tolerance = 10,
+  erosion = 0,
+  colorSource = 'auto',
+  fillInterior = false
+) {
+  const byteLength = image.width * image.height * 4
+  const inputPtr = wasmExports.alloc(byteLength)
+  const outputPtr = wasmExports.alloc(byteLength)
+
+  try {
+    new Uint8Array(wasmExports.memory.buffer).set(image.data, inputPtr)
+    const status = wasmExports.remove_background(
+      inputPtr,
+      outputPtr,
+      image.width,
+      image.height,
+      tolerance,
+      erosion,
+      sourceToWasm(colorSource),
+      fillInterior ? 1 : 0
+    )
+    assert(status === 0, `wasm remove_background failed with status ${status}`)
+
+    const output = new Uint8ClampedArray(
+      new Uint8Array(wasmExports.memory.buffer).slice(outputPtr, outputPtr + byteLength)
+    )
+    return new ImageData(output, image.width, image.height)
+  } finally {
+    wasmExports.dealloc(inputPtr, byteLength)
+    wasmExports.dealloc(outputPtr, byteLength)
+  }
+}
+
+function assertSameImageData(actual, expected, label) {
+  assert(actual.width === expected.width && actual.height === expected.height, `${label}: size mismatch`)
+  for (let i = 0; i < actual.data.length; i++) {
+    if (actual.data[i] !== expected.data[i]) {
+      throw new Error(`${label}: byte ${i} mismatch, wasm=${actual.data[i]} js=${expected.data[i]}`)
+    }
+  }
+}
+
+function processBoth(image, tolerance = 10, erosion = 0, colorSource = 'auto', fillInterior = false, label = 'case') {
+  const jsOutput = removeBackgroundFromImage(
+    image,
+    image.width,
+    image.height,
+    tolerance,
+    erosion,
+    colorSource,
+    fillInterior
+  )
+  const wasmOutput = removeBackgroundWithWasm(image, tolerance, erosion, colorSource, fillInterior)
+  assertSameImageData(wasmOutput, jsOutput, label)
+  return jsOutput
 }
 
 function createImage(width, height, color = [0, 255, 0, 255]) {
@@ -74,7 +156,7 @@ const red = [255, 0, 0]
   setPixel(image, 3, 2, [255, 0, 0, 255])
   setPixel(image, 4, 2, composite(red, green, 0.5))
 
-  const output = removeBackgroundFromImage(image, image.width, image.height, 10, 0, 'auto', false)
+  const output = processBoth(image, 10, 0, 'auto', false, 'semi-transparent greenback matte')
   const background = getPixel(output, 0, 0)
   const quarter = getPixel(output, 2, 2)
   const half = getPixel(output, 4, 2)
@@ -100,7 +182,7 @@ const red = [255, 0, 0]
   setPixel(image, 3, 3, composite(red, green, 0.5))
   setPixel(image, 4, 3, [255, 0, 0, 255])
 
-  const output = removeBackgroundFromImage(image, image.width, image.height, 10, 0, 'auto', false)
+  const output = processBoth(image, 10, 0, 'auto', false, 'transparent padding background detection')
   const transparentPadding = getPixel(output, 0, 0)
   const innerBackground = getPixel(output, 2, 3)
   const half = getPixel(output, 3, 3)
@@ -126,7 +208,7 @@ const red = [255, 0, 0]
     setPixel(image, 9, y, composite(red, green, 0.25))
   }
 
-  const output = removeBackgroundFromImage(image, image.width, image.height, 10, 0, 'auto', false)
+  const output = processBoth(image, 10, 0, 'auto', false, 'continuous semi-transparent band recovery')
   const leftBand = getPixel(output, 3, 3)
   const rightBand = getPixel(output, 9, 3)
 
@@ -144,7 +226,7 @@ const red = [255, 0, 0]
     }
   }
 
-  const output = removeBackgroundFromImage(image, image.width, image.height, 10, 0, 'auto', false)
+  const output = processBoth(image, 10, 0, 'auto', false, 'hard foreground edge preservation')
   const background = getPixel(output, 0, 0)
   const hardEdge = getPixel(output, 2, 2)
   const center = getPixel(output, 3, 3)
@@ -154,6 +236,19 @@ const red = [255, 0, 0]
   assert(center[3] === 255 && center[0] === 150 && center[1] === 150 && center[2] === 150, `expected hard gray center preserved, got ${center}`)
 
   console.log('hard foreground edge preservation:', { background, hardEdge, center })
+}
+
+{
+  const image = createImage(9, 7)
+  for (let y = 2; y <= 4; y++) {
+    setPixel(image, 4, y, [0, 255, 0, 255])
+  }
+
+  const output = processBoth(image, 10, 1, 'auto', true, 'fill interior and erosion')
+  const interior = getPixel(output, 4, 3)
+  assert(interior[3] === 0, `expected interior green removed, got ${interior}`)
+
+  console.log('fill interior and erosion:', { interior })
 }
 
 {
