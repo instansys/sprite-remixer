@@ -336,3 +336,27 @@ const gray = [150, 150, 150]
 
   console.log('corner background median:', { corner })
 }
+
+{
+  const image = createImage(12, 8, [254, 255, 254, 255])
+  for (let y = 2; y <= 5; y++) {
+    for (let x = 2; x <= 9; x++) {
+      setPixel(image, x, y, [255, 255, 255, 255])
+    }
+  }
+  setPixel(image, 5, 3, [110, 70, 40, 255])
+  setPixel(image, 6, 3, [130, 90, 55, 255])
+  setPixel(image, 5, 4, [120, 80, 45, 255])
+  setPixel(image, 6, 4, [140, 95, 60, 255])
+
+  const output = processBoth(image, 10, 0, 'auto', false, 'near-white saturated background noise')
+  const edgeBackground = getPixel(output, 0, 0)
+  const whiteNoise = getPixel(output, 3, 3)
+  const foreground = getPixel(output, 5, 3)
+
+  assert(edgeBackground[3] === 0, `expected detected off-white background removed, got ${edgeBackground}`)
+  assert(whiteNoise[3] === 0, `expected pure-white background noise removed, got ${whiteNoise}`)
+  assertPixelEquals(output, 5, 3, [110, 70, 40, 255], 'near-white noise foreground')
+
+  console.log('near-white saturated background noise:', { edgeBackground, whiteNoise, foreground })
+}

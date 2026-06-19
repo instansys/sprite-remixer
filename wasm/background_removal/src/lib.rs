@@ -30,6 +30,7 @@ struct BackgroundCluster {
 }
 
 struct MatteConfig {
+    channel_noise_floor: u8,
     noise_alpha: f32,
     transparent_delta_e: f64,
     delta_e_alpha_check: f32,
@@ -114,6 +115,11 @@ fn remove_background_core(
         }
 
         let rgb = pixel_rgb(input, pixel_index);
+        if max_channel_distance(rgb, bg_color) <= config.channel_noise_floor {
+            strong_background[pixel_index] = 1;
+            continue;
+        }
+
         let raw_alpha = estimate_alpha_from_background(rgb, bg_color);
         let matte_alpha = apply_alpha_noise_floor(raw_alpha, config.noise_alpha);
         alpha_estimate[pixel_index] = matte_alpha;
@@ -634,6 +640,7 @@ fn detect_background_color(data: &[u8], width: usize, height: usize, color_sourc
 fn get_matte_config(tolerance: u32) -> MatteConfig {
     let normalized = tolerance.min(255) as f32;
     MatteConfig {
+        channel_noise_floor: tolerance.min(255) as u8,
         noise_alpha: normalized / 255.0,
         transparent_delta_e: (normalized as f64 / 255.0) * 100.0,
         delta_e_alpha_check: ((normalized / 255.0) * 2.0 + 0.02).min(1.0),
@@ -708,6 +715,10 @@ fn rgb_distance_squared(a: [u8; 3], b: [u8; 3]) -> i32 {
     let dg = a[1] as i32 - b[1] as i32;
     let db = a[2] as i32 - b[2] as i32;
     dr * dr + dg * dg + db * db
+}
+
+fn max_channel_distance(a: [u8; 3], b: [u8; 3]) -> u8 {
+    a[0].abs_diff(b[0]).max(a[1].abs_diff(b[1])).max(a[2].abs_diff(b[2]))
 }
 
 fn clamp_byte(value: f32) -> u8 {

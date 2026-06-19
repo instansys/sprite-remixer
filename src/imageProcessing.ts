@@ -403,6 +403,14 @@ function rgbDistanceSquared(a: Rgb, b: Rgb): number {
   return dr * dr + dg * dg + db * db
 }
 
+function maxChannelDistance(a: Rgb, b: Rgb): number {
+  return Math.max(
+    Math.abs(a[0] - b[0]),
+    Math.abs(a[1] - b[1]),
+    Math.abs(a[2] - b[2])
+  )
+}
+
 function pixelRgb(data: Uint8ClampedArray, pixelIndex: number): Rgb {
   const idx = pixelIndex * 4
   return [data[idx], data[idx + 1], data[idx + 2]]
@@ -550,6 +558,7 @@ function getMatteConfig(tolerance: number) {
   const transparentDeltaE = (normalizedTolerance / 255) * 100
 
   return {
+    channelNoiseFloor: normalizedTolerance,
     noiseAlpha,
     transparentDeltaE,
     deltaEAlphaCheck: Math.min(1, noiseAlpha * 2 + 0.02),
@@ -847,6 +856,7 @@ export function removeBackgroundFromImage(
   const bgColor = detectBackgroundColor(imageData, width, height, colorSource) as Rgb
   const result = new ImageData(width, height)
   const {
+    channelNoiseFloor,
     noiseAlpha,
     transparentDeltaE,
     deltaEAlphaCheck,
@@ -867,6 +877,12 @@ export function removeBackgroundFromImage(
     }
 
     const rgb: Rgb = [imageData.data[idx], imageData.data[idx + 1], imageData.data[idx + 2]]
+    if (maxChannelDistance(rgb, bgColor) <= channelNoiseFloor) {
+      alphaEstimate[pixelIndex] = 0
+      strongBackground[pixelIndex] = 1
+      continue
+    }
+
     const rawAlpha = estimateAlphaFromBackground(rgb, bgColor)
     alphaEstimate[pixelIndex] = applyAlphaNoiseFloor(rawAlpha, noiseAlpha)
 
