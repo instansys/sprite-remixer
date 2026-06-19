@@ -116,9 +116,11 @@ export type BackgroundColorSource = typeof BackgroundColorSources[number]
 
 const BACKGROUND_CLUSTER_DISTANCE = 24
 const MATTE_ALPHA_EPSILON = 1 / 255
-const RELIABLE_FOREGROUND_ALPHA = 0.95
-const MATTE_PROJECTION_ERROR_BASE = 6
-const MATTE_PROJECTION_ERROR_ALPHA_SCALE = 8
+const FOREGROUND_HINT_ALPHA_ADVANTAGE = 0.08
+const EDGE_MATTE_FALLBACK_DISTANCE = 1
+const EDGE_MATTE_FALLBACK_ALPHA = 0.35
+const MATTE_PROJECTION_ERROR_BASE = 18
+const MATTE_PROJECTION_ERROR_ALPHA_SCALE = 14
 const LOCAL_COLOR_VARIATION_DISTANCE_SQ = 14 * 14
 const FLAT_FOREGROUND_DISTANCE_SQ = 8 * 8
 
@@ -627,6 +629,45 @@ function hasLocalColorVariation(
   return false
 }
 
+function hasFlatForegroundContinuation(
+  imageData: ImageData,
+  width: number,
+  height: number,
+  pixelIndex: number,
+  edgeDistance: Int16Array
+): boolean {
+  const { data } = imageData
+  const currentDistance = edgeDistance[pixelIndex]
+  if (currentDistance < 0) return false
+
+  const x = pixelIndex % width
+  const y = Math.floor(pixelIndex / width)
+  const current = pixelRgb(data, pixelIndex)
+
+  for (let dy = -2; dy <= 2; dy++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      if (dx === 0 && dy === 0) continue
+      if (dx * dx + dy * dy > 4) continue
+
+      const nx = x + dx
+      const ny = y + dy
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue
+
+      const neighborPixel = ny * width + nx
+      const neighborIdx = neighborPixel * 4
+      const neighborDistance = edgeDistance[neighborPixel]
+      if (data[neighborIdx + 3] <= 8) continue
+      if (neighborDistance !== -1 && neighborDistance <= currentDistance) continue
+
+      if (rgbDistanceSquared(current, pixelRgb(data, neighborPixel)) <= FLAT_FOREGROUND_DISTANCE_SQ) {
+        return true
+      }
+    }
+  }
+
+  return false
+}
+
 function findForegroundHint(
   imageData: ImageData,
   width: number,
@@ -660,7 +701,7 @@ function findForegroundHint(
       const neighborIdx = neighborPixel * 4
       const neighborDistance = edgeDistance[neighborPixel]
       if (data[neighborIdx + 3] <= 8 || strongBackground[neighborPixel]) continue
-      if (alphaEstimate[neighborPixel] < RELIABLE_FOREGROUND_ALPHA) continue
+      if (alphaEstimate[neighborPixel] <= currentAlpha + FOREGROUND_HINT_ALPHA_ADVANTAGE) continue
       if (neighborDistance !== -1 && neighborDistance <= currentDistance) continue
 
       const neighborRgb = pixelRgb(data, neighborPixel)
@@ -895,8 +936,26 @@ export function removeBackgroundFromImage(
       }
     }
 
-    if (!strongBackground[pixelIndex] && matteAlpha > 0 && matteAlpha < 1 && !hasReliableMatteProjection) {
-      matteAlpha = 1
+    if (!fillInterior && !strongBackground[pixelIndex] && matteAlpha > 0 && matteAlpha < 1 && !hasReliableMatteProjection) {
+      const hasForegroundContinuation = hasFlatForegroundContinuation(imageData, width, height, pixelIndex, edgeDistance)
+      const hasLocalVariation = hasLocalColorVariation(imageData, width, height, pixelIndex, strongBackground)
+      const shouldKeepEdgeMatte =
+        edgeDistance[pixelIndex] >= 0 &&
+        edgeDistance[pixelIndex] <= EDGE_MATTE_FALLBACK_DISTANCE &&
+        matteAlpha <= EDGE_MATTE_FALLBACK_ALPHA &&
+        hasLocalVariation &&
+        !hasForegroundContinuation
+
+      if (shouldKeepEdgeMatte) {
+        foregroundHint = undefined
+      } else {
+        matteAlpha = 1
+        foregroundHint = undefined
+      }
+    }
+
+    if (strongBackground[pixelIndex]) {
+      matteAlpha = 0
       foregroundHint = undefined
     }
 

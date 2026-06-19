@@ -160,6 +160,7 @@ function composite(foreground, background, alpha) {
 
 const green = [0, 255, 0]
 const red = [255, 0, 0]
+const gray = [150, 150, 150]
 
 {
   const image = createImage(7, 5)
@@ -181,6 +182,28 @@ const red = [255, 0, 0]
   assert(solid[3] === 255 && solid[0] === 255 && solid[1] === 0 && solid[2] === 0, `expected solid red preserved, got ${solid}`)
 
   console.log('semi-transparent greenback matte:', { background, quarter, half, solid })
+}
+
+{
+  const image = createImage(9, 7)
+  for (let y = 2; y <= 4; y++) {
+    for (let x = 3; x <= 5; x++) {
+      setPixel(image, x, y, [150, 150, 150, 255])
+    }
+  }
+  setPixel(image, 2, 3, composite(gray, green, 0.5))
+
+  const output = processBoth(image, 10, 0, 'auto', false, 'low-contrast contour matte recovery')
+  const background = getPixel(output, 0, 0)
+  const half = getPixel(output, 2, 3)
+  const solid = getPixel(output, 4, 3)
+
+  assert(background[3] === 0, `expected low-contrast background alpha 0, got ${background}`)
+  assert(half[3] >= 118 && half[3] <= 138, `expected low-contrast 50% matte recovery, got ${half}`)
+  assert(half[0] >= 140 && half[0] <= 160 && half[1] >= 140 && half[1] <= 160 && half[2] >= 140 && half[2] <= 160, `expected low-contrast spill removed, got ${half}`)
+  assert(solid[3] === 255 && solid[0] === 150 && solid[1] === 150 && solid[2] === 150, `expected low-contrast solid preserved, got ${solid}`)
+
+  console.log('low-contrast contour matte recovery:', { background, half, solid })
 }
 
 {

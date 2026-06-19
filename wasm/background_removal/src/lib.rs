@@ -1,8 +1,10 @@
 const BACKGROUND_CLUSTER_DISTANCE: f32 = 24.0;
 const MATTE_ALPHA_EPSILON: f32 = 1.0 / 255.0;
-const RELIABLE_FOREGROUND_ALPHA: f32 = 0.95;
-const MATTE_PROJECTION_ERROR_BASE: f32 = 6.0;
-const MATTE_PROJECTION_ERROR_ALPHA_SCALE: f32 = 8.0;
+const FOREGROUND_HINT_ALPHA_ADVANTAGE: f32 = 0.08;
+const EDGE_MATTE_FALLBACK_DISTANCE: i16 = 1;
+const EDGE_MATTE_FALLBACK_ALPHA: f32 = 0.35;
+const MATTE_PROJECTION_ERROR_BASE: f32 = 18.0;
+const MATTE_PROJECTION_ERROR_ALPHA_SCALE: f32 = 14.0;
 const LOCAL_COLOR_VARIATION_DISTANCE_SQ: i32 = 14 * 14;
 const FLAT_FOREGROUND_DISTANCE_SQ: i32 = 8 * 8;
 
@@ -195,8 +197,28 @@ fn remove_background_core(
             && matte_alpha > 0.0
             && matte_alpha < 1.0
             && !has_reliable_matte_projection
+            && !fill_interior
         {
-            matte_alpha = 1.0;
+            let has_foreground_continuation =
+                has_flat_foreground_continuation(input, width, height, pixel_index, &edge_distance);
+            let has_local_variation =
+                has_local_color_variation(input, width, height, pixel_index, &strong_background);
+            let should_keep_edge_matte = edge_distance[pixel_index] >= 0
+                && edge_distance[pixel_index] <= EDGE_MATTE_FALLBACK_DISTANCE
+                && matte_alpha <= EDGE_MATTE_FALLBACK_ALPHA
+                && has_local_variation
+                && !has_foreground_continuation;
+
+            if should_keep_edge_matte {
+                foreground_hint = None;
+            } else {
+                matte_alpha = 1.0;
+                foreground_hint = None;
+            }
+        }
+
+        if strong_background[pixel_index] != 0 {
+            matte_alpha = 0.0;
             foreground_hint = None;
         }
 
@@ -731,6 +753,58 @@ fn has_local_color_variation(
     false
 }
 
+fn has_flat_foreground_continuation(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    pixel_index: usize,
+    edge_distance: &[i16],
+) -> bool {
+    let current_distance = edge_distance[pixel_index];
+    if current_distance < 0 {
+        return false;
+    }
+
+    let x = pixel_index % width;
+    let y = pixel_index / width;
+    let current = pixel_rgb(data, pixel_index);
+
+    for dy in -2_i32..=2 {
+        for dx in -2_i32..=2 {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            if dx * dx + dy * dy > 4 {
+                continue;
+            }
+
+            let nx = x as i32 + dx;
+            let ny = y as i32 + dy;
+            if nx < 0 || nx >= width as i32 || ny < 0 || ny >= height as i32 {
+                continue;
+            }
+
+            let neighbor_pixel = ny as usize * width + nx as usize;
+            let neighbor_idx = neighbor_pixel * 4;
+            let neighbor_distance = edge_distance[neighbor_pixel];
+            if data[neighbor_idx + 3] <= 8 {
+                continue;
+            }
+            if neighbor_distance != -1 && neighbor_distance <= current_distance {
+                continue;
+            }
+
+            if rgb_distance_squared(current, pixel_rgb(data, neighbor_pixel))
+                <= FLAT_FOREGROUND_DISTANCE_SQ
+            {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 fn find_foreground_hint(
     data: &[u8],
     width: usize,
@@ -771,7 +845,7 @@ fn find_foreground_hint(
             if data[neighbor_idx + 3] <= 8 || strong_background[neighbor_pixel] != 0 {
                 continue;
             }
-            if alpha_estimate[neighbor_pixel] < RELIABLE_FOREGROUND_ALPHA {
+            if alpha_estimate[neighbor_pixel] <= current_alpha + FOREGROUND_HINT_ALPHA_ADVANTAGE {
                 continue;
             }
             if neighbor_distance != -1 && neighbor_distance <= current_distance {
