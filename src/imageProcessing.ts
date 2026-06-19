@@ -116,6 +116,9 @@ export type BackgroundColorSource = typeof BackgroundColorSources[number]
 
 const BACKGROUND_CLUSTER_DISTANCE = 24
 const MATTE_ALPHA_EPSILON = 1 / 255
+const RELIABLE_FOREGROUND_ALPHA = 0.95
+const MATTE_PROJECTION_ERROR_BASE = 6
+const MATTE_PROJECTION_ERROR_ALPHA_SCALE = 8
 const LOCAL_COLOR_VARIATION_DISTANCE_SQ = 14 * 14
 const FLAT_FOREGROUND_DISTANCE_SQ = 8 * 8
 
@@ -624,45 +627,6 @@ function hasLocalColorVariation(
   return false
 }
 
-function hasFlatForegroundContinuation(
-  imageData: ImageData,
-  width: number,
-  height: number,
-  pixelIndex: number,
-  edgeDistance: Int16Array
-): boolean {
-  const { data } = imageData
-  const currentDistance = edgeDistance[pixelIndex]
-  if (currentDistance < 0) return false
-
-  const x = pixelIndex % width
-  const y = Math.floor(pixelIndex / width)
-  const current = pixelRgb(data, pixelIndex)
-
-  for (let dy = -2; dy <= 2; dy++) {
-    for (let dx = -2; dx <= 2; dx++) {
-      if (dx === 0 && dy === 0) continue
-      if (dx * dx + dy * dy > 4) continue
-
-      const nx = x + dx
-      const ny = y + dy
-      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue
-
-      const neighborPixel = ny * width + nx
-      const neighborIdx = neighborPixel * 4
-      const neighborDistance = edgeDistance[neighborPixel]
-      if (data[neighborIdx + 3] <= 8) continue
-      if (neighborDistance !== -1 && neighborDistance <= currentDistance) continue
-
-      if (rgbDistanceSquared(current, pixelRgb(data, neighborPixel)) <= FLAT_FOREGROUND_DISTANCE_SQ) {
-        return true
-      }
-    }
-  }
-
-  return false
-}
-
 function findForegroundHint(
   imageData: ImageData,
   width: number,
@@ -696,6 +660,7 @@ function findForegroundHint(
       const neighborIdx = neighborPixel * 4
       const neighborDistance = edgeDistance[neighborPixel]
       if (data[neighborIdx + 3] <= 8 || strongBackground[neighborPixel]) continue
+      if (alphaEstimate[neighborPixel] < RELIABLE_FOREGROUND_ALPHA) continue
       if (neighborDistance !== -1 && neighborDistance <= currentDistance) continue
 
       const neighborRgb = pixelRgb(data, neighborPixel)
@@ -901,11 +866,11 @@ export function removeBackgroundFromImage(
       continue
     }
 
-    let matteAlpha = alphaEstimate[pixelIndex]
+    let matteAlpha = strongBackground[pixelIndex] ? 0 : alphaEstimate[pixelIndex]
     let foregroundHint: Rgb | undefined
-    let projectedFromDifferentForeground = false
+    let hasReliableMatteProjection = false
 
-    if (!fillInterior && matteAlpha > 0 && matteAlpha < 1) {
+    if (!fillInterior && !strongBackground[pixelIndex] && matteAlpha > 0 && matteAlpha < 1) {
       const hint = findForegroundHint(
         imageData,
         width,
@@ -919,26 +884,20 @@ export function removeBackgroundFromImage(
 
       if (hint) {
         const projected = estimateAlphaFromForegroundProjection(rgb, bgColor, hint)
-        const maxProjectionError = 18 + (1 - (projected?.alpha ?? 1)) * 14
-        if (projected && projected.error <= maxProjectionError) {
+        const maxProjectionError = MATTE_PROJECTION_ERROR_BASE +
+          (1 - (projected?.alpha ?? 1)) * MATTE_PROJECTION_ERROR_ALPHA_SCALE
+        const projectsFromDifferentForeground = rgbDistanceSquared(rgb, hint) > FLAT_FOREGROUND_DISTANCE_SQ
+        if (projected && projectsFromDifferentForeground && projected.error <= maxProjectionError) {
           matteAlpha = applyAlphaNoiseFloor(projected.alpha, noiseAlpha)
-          foregroundHint = hint
-          projectedFromDifferentForeground = rgbDistanceSquared(rgb, hint) > FLAT_FOREGROUND_DISTANCE_SQ
+          foregroundHint = matteAlpha > 0 ? hint : undefined
+          hasReliableMatteProjection = true
         }
       }
+    }
 
-      if (
-        !projectedFromDifferentForeground &&
-        matteAlpha > 0 &&
-        matteAlpha < 1 &&
-        (
-          hasFlatForegroundContinuation(imageData, width, height, pixelIndex, edgeDistance) ||
-          !hasLocalColorVariation(imageData, width, height, pixelIndex, strongBackground)
-        )
-      ) {
-        matteAlpha = 1
-        foregroundHint = undefined
-      }
+    if (!strongBackground[pixelIndex] && matteAlpha > 0 && matteAlpha < 1 && !hasReliableMatteProjection) {
+      matteAlpha = 1
+      foregroundHint = undefined
     }
 
     const outputAlpha = clampByte((sourceAlpha / 255) * matteAlpha * 255)

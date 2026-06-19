@@ -1,5 +1,8 @@
 const BACKGROUND_CLUSTER_DISTANCE: f32 = 24.0;
 const MATTE_ALPHA_EPSILON: f32 = 1.0 / 255.0;
+const RELIABLE_FOREGROUND_ALPHA: f32 = 0.95;
+const MATTE_PROJECTION_ERROR_BASE: f32 = 6.0;
+const MATTE_PROJECTION_ERROR_ALPHA_SCALE: f32 = 8.0;
 const LOCAL_COLOR_VARIATION_DISTANCE_SQ: i32 = 14 * 14;
 const FLAT_FOREGROUND_DISTANCE_SQ: i32 = 8 * 8;
 
@@ -149,11 +152,19 @@ fn remove_background_core(
             continue;
         }
 
-        let mut matte_alpha = alpha_estimate[pixel_index];
+        let mut matte_alpha = if strong_background[pixel_index] != 0 {
+            0.0
+        } else {
+            alpha_estimate[pixel_index]
+        };
         let mut foreground_hint: Option<[u8; 3]> = None;
-        let mut projected_from_different_foreground = false;
+        let mut has_reliable_matte_projection = false;
 
-        if !fill_interior && matte_alpha > 0.0 && matte_alpha < 1.0 {
+        if !fill_interior
+            && strong_background[pixel_index] == 0
+            && matte_alpha > 0.0
+            && matte_alpha < 1.0
+        {
             let hint = find_foreground_hint(
                 input,
                 width,
@@ -167,25 +178,26 @@ fn remove_background_core(
 
             if let Some(hint_rgb) = hint {
                 if let Some(projected) = estimate_alpha_from_foreground_projection(rgb, bg_color, hint_rgb) {
-                    let max_projection_error = 18.0 + (1.0 - projected.0) * 14.0;
-                    if projected.1 <= max_projection_error {
+                    let max_projection_error =
+                        MATTE_PROJECTION_ERROR_BASE + (1.0 - projected.0) * MATTE_PROJECTION_ERROR_ALPHA_SCALE;
+                    let projects_from_different_foreground =
+                        rgb_distance_squared(rgb, hint_rgb) > FLAT_FOREGROUND_DISTANCE_SQ;
+                    if projects_from_different_foreground && projected.1 <= max_projection_error {
                         matte_alpha = apply_alpha_noise_floor(projected.0, config.noise_alpha);
-                        foreground_hint = Some(hint_rgb);
-                        projected_from_different_foreground =
-                            rgb_distance_squared(rgb, hint_rgb) > FLAT_FOREGROUND_DISTANCE_SQ;
+                        foreground_hint = if matte_alpha > 0.0 { Some(hint_rgb) } else { None };
+                        has_reliable_matte_projection = true;
                     }
                 }
             }
+        }
 
-            if !projected_from_different_foreground
-                && matte_alpha > 0.0
-                && matte_alpha < 1.0
-                && (has_flat_foreground_continuation(input, width, height, pixel_index, &edge_distance)
-                    || !has_local_color_variation(input, width, height, pixel_index, &strong_background))
-            {
-                matte_alpha = 1.0;
-                foreground_hint = None;
-            }
+        if strong_background[pixel_index] == 0
+            && matte_alpha > 0.0
+            && matte_alpha < 1.0
+            && !has_reliable_matte_projection
+        {
+            matte_alpha = 1.0;
+            foreground_hint = None;
         }
 
         let output_alpha = clamp_byte((source_alpha as f32 / 255.0) * matte_alpha * 255.0);
@@ -719,58 +731,6 @@ fn has_local_color_variation(
     false
 }
 
-fn has_flat_foreground_continuation(
-    data: &[u8],
-    width: usize,
-    height: usize,
-    pixel_index: usize,
-    edge_distance: &[i16],
-) -> bool {
-    let current_distance = edge_distance[pixel_index];
-    if current_distance < 0 {
-        return false;
-    }
-
-    let x = pixel_index % width;
-    let y = pixel_index / width;
-    let current = pixel_rgb(data, pixel_index);
-
-    for dy in -2_i32..=2 {
-        for dx in -2_i32..=2 {
-            if dx == 0 && dy == 0 {
-                continue;
-            }
-            if dx * dx + dy * dy > 4 {
-                continue;
-            }
-
-            let nx = x as i32 + dx;
-            let ny = y as i32 + dy;
-            if nx < 0 || nx >= width as i32 || ny < 0 || ny >= height as i32 {
-                continue;
-            }
-
-            let neighbor_pixel = ny as usize * width + nx as usize;
-            let neighbor_idx = neighbor_pixel * 4;
-            let neighbor_distance = edge_distance[neighbor_pixel];
-            if data[neighbor_idx + 3] <= 8 {
-                continue;
-            }
-            if neighbor_distance != -1 && neighbor_distance <= current_distance {
-                continue;
-            }
-
-            if rgb_distance_squared(current, pixel_rgb(data, neighbor_pixel))
-                <= FLAT_FOREGROUND_DISTANCE_SQ
-            {
-                return true;
-            }
-        }
-    }
-
-    false
-}
-
 fn find_foreground_hint(
     data: &[u8],
     width: usize,
@@ -809,6 +769,9 @@ fn find_foreground_hint(
             let neighbor_idx = neighbor_pixel * 4;
             let neighbor_distance = edge_distance[neighbor_pixel];
             if data[neighbor_idx + 3] <= 8 || strong_background[neighbor_pixel] != 0 {
+                continue;
+            }
+            if alpha_estimate[neighbor_pixel] < RELIABLE_FOREGROUND_ALPHA {
                 continue;
             }
             if neighbor_distance != -1 && neighbor_distance <= current_distance {

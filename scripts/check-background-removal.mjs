@@ -138,6 +138,17 @@ function getPixel(image, x, y) {
   ]
 }
 
+function assertPixelEquals(image, x, y, expected, label) {
+  const actual = getPixel(image, x, y)
+  assert(
+    actual[0] === expected[0] &&
+      actual[1] === expected[1] &&
+      actual[2] === expected[2] &&
+      actual[3] === expected[3],
+    `${label}: expected ${expected}, got ${actual}`
+  )
+}
+
 function composite(foreground, background, alpha) {
   return [
     Math.round(alpha * foreground[0] + (1 - alpha) * background[0]),
@@ -236,6 +247,49 @@ const red = [255, 0, 0]
   assert(center[3] === 255 && center[0] === 150 && center[1] === 150 && center[2] === 150, `expected hard gray center preserved, got ${center}`)
 
   console.log('hard foreground edge preservation:', { background, hardEdge, center })
+}
+
+{
+  const image = createImage(9, 7)
+  const foreground = new Map()
+  const colors = [
+    [80, 72, 160, 255],
+    [95, 84, 168, 255],
+    [110, 82, 150, 255],
+    [130, 77, 140, 255],
+    [145, 87, 155, 255],
+    [95, 92, 168, 255],
+    [110, 90, 150, 255],
+    [130, 85, 140, 255],
+    [145, 95, 155, 255],
+    [80, 88, 160, 255],
+    [95, 100, 168, 255],
+    [110, 98, 150, 255],
+    [130, 93, 140, 255],
+    [145, 103, 155, 255]
+  ]
+  let colorIndex = 0
+
+  for (let y = 2; y <= 4; y++) {
+    for (let x = 2; x <= 6; x++) {
+      if (x === 2 && y === 3) continue
+      const color = colors[colorIndex++]
+      setPixel(image, x, y, color)
+      foreground.set(`${x},${y}`, color)
+    }
+  }
+
+  const output = processBoth(image, 10, 0, 'auto', false, 'opaque varied foreground preservation')
+
+  for (const [key, color] of foreground) {
+    const [x, y] = key.split(',').map(Number)
+    assertPixelEquals(output, x, y, color, `opaque varied foreground at ${key}`)
+  }
+
+  console.log('opaque varied foreground preservation:', {
+    edge: getPixel(output, 2, 2),
+    center: getPixel(output, 4, 3)
+  })
 }
 
 {
